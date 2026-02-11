@@ -55,7 +55,7 @@ const App = () => (
             <Route path="/billing" element={<Billing />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/phone-numbers" element={<PhoneNumbers />} />
-            <Route path="/email" element={<Email />} />
+            <Route path="/emails" element={<Email />} />
             <Route path="/ai-prompt" element={<AIPrompt />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />

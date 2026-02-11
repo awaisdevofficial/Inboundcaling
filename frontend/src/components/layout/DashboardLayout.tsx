@@ -50,7 +50,7 @@ const menuSections: MenuSection[] = [
       { path: "/bots", label: "Agents", icon: Bot },
       { path: "/phone-numbers", label: "Phone Numbers", icon: PhoneCall },
       { path: "/knowledge-bases", label: "Knowledge Bases", icon: BookOpen },
-      { path: "/email", label: "Email", icon: Mail },
+      { path: "/emails", label: "Emails", icon: Mail },
       { path: "/ai-prompt", label: "AI Prompt", icon: Sparkles },
     ],
   },
