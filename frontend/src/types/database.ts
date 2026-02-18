@@ -176,6 +176,8 @@ export interface Profile {
   // Payment and trial
   payment_status?: string | null;
   trial_credits_expires_at?: string | null;
+  // Tour
+  tour_completed?: boolean | null;
 }
 
 export interface PageLead {

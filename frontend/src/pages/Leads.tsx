@@ -708,7 +708,7 @@ ${analysis.appointment.appointment_type ? `- Type: ${analysis.appointment.appoin
         <FeatureGate featureName="leads">
           <div className="space-y-8 pb-8">
           {/* Header */}
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4" data-tour="leads-header">
             <div className="space-y-1">
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Leads</h1>
               <p className="text-slate-500 text-base">View and manage your leads from calls and landing pages</p>

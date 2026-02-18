@@ -20,7 +20,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
 import { InvoiceNotificationBanner } from "@/components/InvoiceNotificationBanner";
 import { NotificationCenter } from "@/components/NotificationCenter";
-import { CompleteProfileModal } from "@/components/CompleteProfileModal";
+import { OnboardingTour } from "@/components/OnboardingTour";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -211,8 +211,8 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         </div>
       </main>
 
-      {/* Complete Profile Modal - shows when company info is missing */}
-      <CompleteProfileModal />
+      {/* Onboarding Tour */}
+      <OnboardingTour />
     </div>
   );
 }

@@ -53,6 +53,28 @@ export default function PhoneNumbers() {
   const [linkingNumberId, setLinkingNumberId] = useState<string | null>(null);
   const [userProfiles, setUserProfiles] = useState<Record<string, Profile>>({});
 
+  // Helper function to normalize phone number to E.164 format
+  const normalizePhoneNumber = useCallback((phone: string): string => {
+    // Remove all spaces, dashes, parentheses, dots, and other special chars except +
+    let normalized = phone
+      .replace(/\s/g, "")      // Remove all spaces
+      .replace(/-/g, "")        // Remove dashes
+      .replace(/\(/g, "")       // Remove opening parentheses
+      .replace(/\)/g, "")       // Remove closing parentheses
+      .replace(/\./g, "")       // Remove dots
+      .replace(/\s+/g, "");     // Remove any remaining whitespace
+    
+    // Ensure it starts with + (if it doesn't already)
+    if (!normalized.startsWith("+")) {
+      // If it starts with a digit, add +
+      if (/^\d/.test(normalized)) {
+        normalized = "+" + normalized;
+      }
+    }
+    
+    return normalized;
+  }, []);
+
   // Helper function to refresh phone numbers list
   const refreshPhoneNumbers = useCallback(async () => {
     if (!user) return;
@@ -178,24 +200,31 @@ export default function PhoneNumbers() {
     setNumberName("");
 
     try {
+      // Normalize phone number to E.164 format to prevent duplicates
+      const normalizedPhoneNumber = normalizePhoneNumber(savedPhoneNumber);
+      
       const number = {
-        phone_number: savedPhoneNumber,
+        phone_number: normalizedPhoneNumber,
         termination_uri: savedTerminationUri,
         name: savedName,
       };
       if (user) {
         try {
-          // Check if the phone number already exists for this user
-          const { data: existingData, error: checkError } = await supabase
+          // Check if the phone number already exists for this user (check all formats)
+          // Fetch all phone numbers for this user and compare normalized versions
+          const { data: allNumbers, error: fetchError } = await supabase
             .from("imported_phone_numbers" as any)
-            .select("id")
-            .eq("user_id", user.id)
-            .eq("phone_number", number.phone_number)
-            .maybeSingle();
+            .select("id, phone_number")
+            .eq("user_id", user.id);
 
-          if (checkError && checkError.code !== "PGRST116") { // PGRST116 is "not found" which is OK
-            throw new Error(`Database error: ${checkError.message}`);
+          if (fetchError && fetchError.code !== "PGRST116") {
+            throw new Error(`Database error: ${fetchError.message}`);
           }
+
+          // Check if normalized version already exists
+          const existingData = (allNumbers || []).find((item: any) => 
+            normalizePhoneNumber(item.phone_number) === normalizedPhoneNumber
+          );
 
           let importedNumberId: string;
 
@@ -394,25 +423,127 @@ export default function PhoneNumbers() {
   const handleDelete = async (id: string) => {
     if (!user || !id) return;
 
+    let retellDeleted = false;
+    let retellError: any = null;
+    let supabaseDeleted = false;
+    let supabaseError: any = null;
+
     try {
-      const { error } = await supabase
+      // First, get the phone number record to retrieve the phone number
+      const { data: phoneData, error: fetchError } = await supabase
         .from("imported_phone_numbers" as any)
-        .delete()
+        .select("phone_number")
         .eq("id", id)
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        .single();
 
-      if (error) throw error;
+      if (fetchError) throw fetchError;
+      if (!phoneData?.phone_number) {
+        throw new Error("Phone number not found");
+      }
 
-      setImportedNumbers((prev) => prev.filter((n) => n.id !== id));
-      toast({
-        title: "Success",
-        description: "Phone number deleted successfully",
-      });
-    } catch (error) {
-      // Removed console.error for security
+      const phoneNumber = phoneData.phone_number;
+
+      // Delete phone number from Retell API if API key exists
+      if (profile?.retell_api_key) {
+        try {
+          // Format phone number to E.164 format: remove all spaces, dashes, parentheses, and other special chars except +
+          // Keep only digits and + sign, ensure it starts with +
+          let formattedPhoneNumber = phoneNumber
+            .replace(/\s/g, "")      // Remove all spaces
+            .replace(/-/g, "")        // Remove dashes
+            .replace(/\(/g, "")       // Remove opening parentheses
+            .replace(/\)/g, "")       // Remove closing parentheses
+            .replace(/\./g, "")       // Remove dots
+            .replace(/\s+/g, "");     // Remove any remaining whitespace
+          
+          // Ensure it starts with + (if it doesn't already)
+          if (!formattedPhoneNumber.startsWith("+")) {
+            // If it starts with a digit, add +
+            if (/^\d/.test(formattedPhoneNumber)) {
+              formattedPhoneNumber = "+" + formattedPhoneNumber;
+            }
+          }
+          
+          // Final validation: should match E.164 format (+ followed by 1-15 digits)
+          if (!/^\+[1-9]\d{1,14}$/.test(formattedPhoneNumber)) {
+            throw new Error(`Invalid phone number format: ${formattedPhoneNumber}. Expected E.164 format (e.g., +14157774444)`);
+          }
+          
+          const response = await fetch(
+            `https://api.retellai.com/delete-phone-number/${encodeURIComponent(formattedPhoneNumber)}`,
+            {
+              method: "DELETE",
+              headers: {
+                Authorization: `Bearer ${profile.retell_api_key}`,
+              },
+            }
+          );
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(
+              errorData.message || errorData.error || `Retell API error: ${response.status}`
+            );
+          }
+          retellDeleted = true;
+        } catch (error: any) {
+          retellError = error;
+          // Continue with database deletion even if Retell deletion fails
+        }
+      }
+
+      // Delete from Supabase database (attempt regardless of Retell deletion result)
+      try {
+        const { error: dbError } = await supabase
+          .from("imported_phone_numbers" as any)
+          .delete()
+          .eq("id", id)
+          .eq("user_id", user.id);
+
+        if (dbError) throw dbError;
+        supabaseDeleted = true;
+      } catch (error: any) {
+        supabaseError = error;
+      }
+
+      // Handle results
+      if (retellDeleted && supabaseDeleted) {
+        setImportedNumbers((prev) => prev.filter((n) => n.id !== id));
+        toast({
+          title: "Success",
+          description: "Phone number deleted successfully from both Retell and database",
+        });
+      } else if (supabaseDeleted && !retellDeleted) {
+        setImportedNumbers((prev) => prev.filter((n) => n.id !== id));
+        // If no API key, just show success. Otherwise show partial success
+        if (!profile?.retell_api_key) {
+          toast({
+            title: "Success",
+            description: "Phone number deleted successfully from database",
+          });
+        } else {
+          toast({
+            title: "Partial Success",
+            description: `Phone number deleted from database. Retell deletion failed: ${retellError?.message || "Unknown error"}`,
+            variant: "destructive",
+          });
+        }
+      } else if (retellDeleted && !supabaseDeleted) {
+        toast({
+          title: "Partial Success",
+          description: `Phone number deleted from Retell. Database deletion failed: ${supabaseError?.message || "Unknown error"}`,
+          variant: "destructive",
+        });
+      } else {
+        throw new Error(
+          `Both deletions failed. Retell: ${retellError?.message || "Unknown error"}, Database: ${supabaseError?.message || "Unknown error"}`
+        );
+      }
+    } catch (error: any) {
       toast({
         title: "Error",
-        description: "Failed to delete phone number",
+        description: error?.message || "Failed to delete phone number",
         variant: "destructive",
       });
     }
@@ -525,7 +656,7 @@ export default function PhoneNumbers() {
       <DashboardLayout>
         <div className="space-y-8 pb-8">
           {/* Header Section */}
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4" data-tour="phone-numbers-header">
             <div className="space-y-1">
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Phone Numbers</h1>
               <p className="text-slate-500 text-base">Import and manage your phone numbers, link them to agents, and view ownership information</p>
@@ -630,7 +761,7 @@ export default function PhoneNumbers() {
             <div className={`transition-all duration-300 ${isVideoExpanded ? 'md:col-span-3 order-last' : 'md:col-span-2'}`}>
               <div className="grid md:grid-cols-2 gap-6">
                 {/* Add Number Form */}
-                <Card className="border-slate-200 shadow-sm">
+                <Card className="border-slate-200 shadow-sm" data-tour="import-form">
               <CardHeader className="border-b border-slate-100 pb-4">
                 <CardTitle className="flex items-center gap-2 text-lg font-semibold text-slate-900">
                   <Phone className="h-5 w-5 text-blue-600" />
@@ -703,7 +834,7 @@ export default function PhoneNumbers() {
             </Card>
 
             {/* Numbers List */}
-            <Card className="border-slate-200 shadow-sm">
+            <Card className="border-slate-200 shadow-sm" data-tour="phone-numbers-list">
               <CardHeader className="border-b border-slate-100 pb-4">
                 <div>
                   <CardTitle className="text-lg font-semibold text-slate-900">Imported Numbers</CardTitle>

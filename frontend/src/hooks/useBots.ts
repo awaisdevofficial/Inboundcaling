@@ -229,7 +229,29 @@ export function useBots() {
             }
           }
           
-          return webhookResponse;
+          // Find the newly created bot's database ID by querying the database
+          let databaseBotId: string | null = null;
+          try {
+            const { data: newBot, error: botError } = await supabase
+              .from("bots")
+              .select("id")
+              .eq("user_id", user.id)
+              .eq("name", botData.name)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .single();
+            
+            if (!botError && newBot) {
+              databaseBotId = newBot.id;
+            }
+          } catch (error) {
+            // If query fails, databaseBotId remains null
+          }
+          
+          return {
+            ...webhookResponse,
+            database_bot_id: databaseBotId,
+          };
         }
       }
 
@@ -246,7 +268,29 @@ export function useBots() {
       // Refresh bots list after webhook processes (webhook handles DB)
       await fetchBots();
 
-      return webhookResponse;
+      // Find the newly created bot's database ID by querying the database
+      let databaseBotId: string | null = null;
+      try {
+        const { data: newBot, error: botError } = await supabase
+          .from("bots")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("name", botData.name)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .single();
+        
+        if (!botError && newBot) {
+          databaseBotId = newBot.id;
+        }
+      } catch (error) {
+        // If query fails, databaseBotId remains null
+      }
+
+      return {
+        ...webhookResponse,
+        database_bot_id: databaseBotId,
+      };
     } catch (error) {
       // Removed console.error for security
       const errorMessage =

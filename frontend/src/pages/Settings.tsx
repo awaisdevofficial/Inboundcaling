@@ -28,6 +28,7 @@ import {
   MapPin,
   Briefcase,
   Contact,
+  Map,
 } from "lucide-react";
 import {
   Card,
@@ -554,7 +555,7 @@ export default function Settings() {
         ) : (
           <div className="space-y-8 pb-8">
             {/* Header Section */}
-            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4" data-tour="settings-header">
               <div className="space-y-1">
                 <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Settings</h1>
                 <p className="text-slate-500 text-base">Manage your account preferences and configurations</p>
@@ -2044,6 +2045,73 @@ export default function Settings() {
                           {new Date(profile.deactivated_at).toLocaleDateString()}
                         </p>
                       )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Onboarding Tour Card */}
+                <Card className="border-slate-200 shadow-sm">
+                  <CardHeader className="border-b border-slate-100 pb-4">
+                    <CardTitle className="text-xl font-semibold flex items-center gap-2">
+                      <Map className="h-5 w-5 text-blue-600" />
+                      Onboarding Tour
+                    </CardTitle>
+                    <CardDescription className="text-sm mt-1">
+                      Restart the interactive tour to learn about all features
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="pt-6 space-y-4">
+                    <div className="space-y-2">
+                      <p className="text-sm text-slate-600">
+                        The onboarding tour will guide you through the main features of the platform, including:
+                      </p>
+                      <ul className="text-sm text-slate-600 space-y-1 list-disc list-inside ml-2">
+                        <li>Dashboard overview and key metrics</li>
+                        <li>How to create and manage agents</li>
+                        <li>Importing and linking phone numbers</li>
+                        <li>Viewing call history and statistics</li>
+                        <li>Managing credits and billing</li>
+                      </ul>
+                    </div>
+                    <div className="pt-4 border-t border-slate-100">
+                      <Button
+                        onClick={async () => {
+                          if (!profile) return;
+                          
+                          try {
+                            // Clear localStorage
+                            localStorage.removeItem("onboarding_tour_step");
+                            localStorage.setItem("onboarding_tour_active", "true");
+                            
+                            const { error } = await supabase
+                              .from("profiles")
+                              .update({ tour_completed: false } as any)
+                              .eq("user_id", profile.user_id);
+
+                            if (error) throw error;
+                            
+                            await refetch();
+                            
+                            toast({
+                              title: "Tour Restarted",
+                              description: "The onboarding tour will start when you navigate to the dashboard.",
+                            });
+                            
+                            // Navigate to dashboard to start the tour
+                            navigate("/dashboard");
+                          } catch (error: any) {
+                            toast({
+                              title: "Error",
+                              description: error?.message || "Failed to restart tour",
+                              variant: "destructive",
+                            });
+                          }
+                        }}
+                        className="bg-blue-600 hover:bg-blue-700"
+                      >
+                        <Map className="h-4 w-4 mr-2" />
+                        Restart Tour
+                      </Button>
                     </div>
                   </CardContent>
                 </Card>

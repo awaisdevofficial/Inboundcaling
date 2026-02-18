@@ -161,7 +161,7 @@ export default function Billing() {
       <DashboardLayout>
         <div className="space-y-8 pb-8">
           {/* Page Header */}
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4" data-tour="billing-header">
             <div className="space-y-1">
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Billing & Credits</h1>
               <p className="text-slate-500 text-base">Manage your account credits, subscriptions, and billing history</p>
@@ -231,7 +231,7 @@ export default function Billing() {
 
           {/* Stats Overview Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="border-slate-200 shadow-sm hover:shadow-md transition-all bg-white">
+            <Card className="border-slate-200 shadow-sm hover:shadow-md transition-all bg-white" data-tour="credit-balance">
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                   <div>
@@ -284,15 +284,15 @@ export default function Billing() {
                 <BarChart3 className="h-4 w-4 mr-2" />
                 Overview
               </TabsTrigger>
-              <TabsTrigger value="plans" className="data-[state=active]:bg-white data-[state=active]:shadow-sm">
+              <TabsTrigger value="plans" className="data-[state=active]:bg-white data-[state=active]:shadow-sm" data-tour="billing-plans">
                 <Package className="h-4 w-4 mr-2" />
                 Plans
               </TabsTrigger>
-              <TabsTrigger value="invoices" className="data-[state=active]:bg-white data-[state=active]:shadow-sm">
+              <TabsTrigger value="invoices" className="data-[state=active]:bg-white data-[state=active]:shadow-sm" data-tour="billing-invoices">
                 <Receipt className="h-4 w-4 mr-2" />
                 Invoices
               </TabsTrigger>
-              <TabsTrigger value="history" className="data-[state=active]:bg-white data-[state=active]:shadow-sm">
+              <TabsTrigger value="history" className="data-[state=active]:bg-white data-[state=active]:shadow-sm" data-tour="billing-history">
                 <FileText className="h-4 w-4 mr-2" />
                 History
               </TabsTrigger>

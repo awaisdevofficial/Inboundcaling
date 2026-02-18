@@ -141,7 +141,7 @@ async function handleUserCreated(user) {
         retell_api_key: process.env.RETELL_API_KEY || null,
         total_minutes_used: 0,
         Total_credit: 0,
-        Remaning_credits: 100,
+        Remaning_credits: 0, // Credits will be given after tour completion
         is_deactivated: false,
         payment_status: 'unpaid',
         trial_credits_expires_at: trialExpirationDate.toISOString(),
@@ -157,6 +157,7 @@ async function handleUserCreated(user) {
         console.log('Profile created successfully via webhook');
       }
     }
+    // Credits will be deposited when user completes the onboarding tour
 
     // Log activity
     await logActivity(user.id, 'account_created', 'User account created', {

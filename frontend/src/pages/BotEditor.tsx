@@ -683,8 +683,14 @@ Always check the time FIRST before engaging in any conversation with the caller.
       if (isCreateMode) {
         const result: any = await createBot(payload);
         if (result && (result.id || result.bot_id)) {
-          toast.success("Agent created successfully");
-          navigate("/bots");
+          // Navigate to the newly created bot's editor page
+          const botId = result.database_bot_id || result.id || result.bot_id;
+          if (botId) {
+            navigate(`/bots/${botId}`);
+          } else {
+            // Fallback to bots list if ID not available
+            navigate("/bots");
+          }
         }
       } else if (id) {
         await updateBot(id, payload);
@@ -727,7 +733,7 @@ Always check the time FIRST before engaging in any conversation with the caller.
           <div className="flex flex-col h-full space-y-6 w-full pb-10">
           
           {/* Header */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between" data-tour="agent-editor-header">
             <div className="flex items-center gap-4">
               <Button variant="ghost" size="icon" onClick={() => navigate("/bots")}>
                 <ArrowLeft className="h-5 w-5" />
@@ -807,7 +813,7 @@ Always check the time FIRST before engaging in any conversation with the caller.
                       
                       {/* Section: Details */}
                       {editSection === "details" && (
-                        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300" data-tour="agent-details">
                           <div className="flex justify-between items-center">
                             <h2 className="text-lg font-semibold">Agent Details</h2>
                           </div>
@@ -984,7 +990,7 @@ Always check the time FIRST before engaging in any conversation with the caller.
 
                       {/* Section: Voice Configuration */}
                       {editSection === "voice" && (
-                        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300" data-tour="agent-voice">
                           <h2 className="text-lg font-semibold">Voice Configuration</h2>
                           <Separator />
 
@@ -1125,7 +1131,7 @@ Always check the time FIRST before engaging in any conversation with the caller.
 
                       {/* Section: Agent Settings */}
                       {editSection === "settings" && (
-                        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300" data-tour="agent-prompt">
                           
                           {/* Availability Settings */}
                           <div className="space-y-4">

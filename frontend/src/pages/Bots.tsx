@@ -49,7 +49,7 @@ export default function Bots() {
         <FeatureGate featureName="agents">
           <div className="space-y-8 pb-8">
             {/* Header Section */}
-            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4" data-tour="agents-header">
               <div className="space-y-1">
                 <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Agents</h1>
                 <p className="text-slate-500 text-base">Manage your AI voice agents and automate customer interactions</p>
@@ -57,6 +57,7 @@ export default function Bots() {
               <Button 
                 onClick={handleCreate}
                 className="bg-blue-600 hover:bg-blue-700 text-white gap-2 shadow-sm transition-all hover:shadow-md"
+                data-tour="create-agent-btn"
               >
                 <Plus className="h-4 w-4" /> Create Agent
               </Button>
@@ -64,7 +65,7 @@ export default function Bots() {
 
             {/* Stats Section */}
             {safeBots.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4" data-tour="agents-stats">
                 <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
                   <div className="flex items-center justify-between">
                     <div>

@@ -391,7 +391,7 @@ export default function KnowledgeBases() {
       <DashboardLayout>
         <div className="space-y-8 pb-8">
           {/* Header Section */}
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4" data-tour="knowledge-bases-header">
             <div className="space-y-1">
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Knowledge Bases</h1>
               <p className="text-slate-500 text-base">Create and manage knowledge bases for your AI agents</p>
@@ -399,6 +399,7 @@ export default function KnowledgeBases() {
             <Button 
               onClick={() => setShowCreateModal(true)} 
               className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm transition-all hover:shadow-md"
+              data-tour="knowledge-bases-create"
             >
               <Plus className="mr-2 h-4 w-4" /> Create Knowledge Base
             </Button>

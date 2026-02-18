@@ -93,10 +93,21 @@ async function apiRequest<T>(
       endpoint,
       error: error.message,
       errorObject: error,
+      url: `${API_BASE_URL}${endpoint}`,
     });
+    
+    // Provide more helpful error messages
+    let errorMessage = error.message || 'Network error occurred';
+    
+    if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
+      errorMessage = 'Cannot connect to server. Please make sure the backend server is running on http://localhost:3001';
+    } else if (error.message?.includes('CORS')) {
+      errorMessage = 'CORS error. Please check server configuration.';
+    }
+    
     return {
       success: false,
-      error: error.message || 'Network error occurred',
+      error: errorMessage,
     };
   }
 }

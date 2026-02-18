@@ -235,7 +235,7 @@ export default function Calls() {
         <FeatureGate featureName="call history">
           <div className="space-y-8 pb-8">
           {/* Header */}
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4" data-tour="calls-header">
             <div className="space-y-1">
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Call History</h1>
               <p className="text-slate-500 text-base">View and manage all your call records</p>
@@ -243,7 +243,7 @@ export default function Calls() {
           </div>
 
           {/* Stats Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4" data-tour="calls-stats">
             <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
               <div className="flex items-center justify-between">
                 <div>
@@ -316,7 +316,7 @@ export default function Calls() {
                     </CardDescription>
                   </div>
                   {/* Filter Dropdown and Export Button */}
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2" data-tour="calls-filters">
                     <Button
                       variant="outline"
                       size="sm"
@@ -401,7 +401,7 @@ export default function Calls() {
                   </div>
                 ) : (
                   <ScrollArea className="h-[600px]">
-                    <div className="overflow-x-auto">
+                    <div className="overflow-x-auto" data-tour="calls-table">
                       <Table>
                         <TableHeader>
                           <TableRow>

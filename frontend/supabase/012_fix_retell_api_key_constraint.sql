@@ -38,7 +38,7 @@ BEGIN
     NULL,  -- retell_api_key - can be set later by the user
     0,       -- total_minutes_used
     0,       -- Total_credit (total credits ever purchased/added)
-    100,     -- Remaning_credits (100 free trial credits)
+    0,       -- Remaning_credits (credits will be given after tour completion)
     false,
     'unpaid',
     now() + interval '7 days',  -- 7-day trial

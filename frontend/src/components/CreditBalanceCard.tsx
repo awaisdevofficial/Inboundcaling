@@ -3,7 +3,7 @@ import { useCreditUsage } from "@/hooks/useCreditUsage";
 import { useProfile } from "@/hooks/useProfile";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Wallet, TrendingDown, Clock, Plus } from "lucide-react";
+import { Wallet, TrendingDown, Clock, Plus, Sparkles } from "lucide-react";
 import {
   formatCurrency,
   getCreditBalanceStatus,
@@ -11,6 +11,7 @@ import {
   formatDuration,
 } from "@/lib/credits";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useNavigate } from "react-router-dom";
 
 interface CreditBalanceCardProps {
   onAddCredits?: () => void;
@@ -20,6 +21,7 @@ export function CreditBalanceCard({ onAddCredits }: CreditBalanceCardProps) {
   const { wallet, loading: walletLoading } = useWallet();
   const { profile, loading: profileLoading } = useProfile();
   const { getTotalMinutesUsed, loading: usageLoading } = useCreditUsage();
+  const navigate = useNavigate();
 
   if (walletLoading || usageLoading || profileLoading) {
     return (
@@ -48,6 +50,8 @@ export function CreditBalanceCard({ onAddCredits }: CreditBalanceCardProps) {
     : getTotalMinutesUsed();
   const { status, color, message } = getCreditBalanceStatus(remainingCredits);
   const remainingMinutes = estimateRemainingMinutes(remainingCredits);
+  const hasNoCredits = remainingCredits <= 0;
+  const tourNotCompleted = profile?.tour_completed === false || profile?.tour_completed === null;
 
   return (
     <Card>
@@ -64,6 +68,35 @@ export function CreditBalanceCard({ onAddCredits }: CreditBalanceCardProps) {
           <p className="text-sm text-slate-500">{remainingCredits.toFixed(2)} minutes available</p>
           <p className={`text-sm ${color}`}>{message}</p>
         </div>
+
+        {/* Tour Completion Message */}
+        {hasNoCredits && tourNotCompleted && (
+          <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm">
+            <div className="flex items-start gap-3">
+              <Sparkles className="h-5 w-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="font-semibold text-blue-900 dark:text-blue-100 mb-1">
+                  Complete the onboarding tour to get 100 free credits!
+                </p>
+                <p className="text-blue-700 dark:text-blue-300 mb-3">
+                  Take a quick tour of the platform and receive your free trial credits.
+                </p>
+                <Button
+                  onClick={() => {
+                    // Reset tour to show it again
+                    localStorage.setItem("onboarding_tour_active", "true");
+                    localStorage.setItem("onboarding_tour_step", "0");
+                    window.location.reload();
+                  }}
+                  size="sm"
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  Start Tour
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-2 gap-4 pt-2">

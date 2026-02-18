@@ -18,7 +18,8 @@ import {
   Zap,
   BarChart3,
   TrendingUp,
-  AlertCircle
+  AlertCircle,
+  Sparkles
 } from "lucide-react";
 import {
   Card,
@@ -247,7 +248,7 @@ export default function Dashboard() {
         <FeatureGate featureName="the dashboard">
           <div className="space-y-8 pb-8">
             {/* Header */}
-            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4" data-tour="dashboard-header">
               <div className="space-y-1">
                 <h1 className="text-3xl font-bold text-slate-900 tracking-tight">
                   Welcome back, {userName}
@@ -255,14 +256,14 @@ export default function Dashboard() {
                 <p className="text-slate-500 text-base">Here's what's happening with your agents today.</p>
               </div>
               <div className="flex gap-3">
-                <Button onClick={() => navigate('/bots/create')} className="bg-blue-600 hover:bg-blue-700 shadow-sm transition-all hover:shadow">
+                <Button onClick={() => navigate('/bots/create')} className="bg-blue-600 hover:bg-blue-700 shadow-sm transition-all hover:shadow" data-tour="create-agent-button">
                   <Bot className="mr-2 h-4 w-4" /> Create Agent
                 </Button>
               </div>
             </div>
 
             {/* Key Metrics */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" data-tour="dashboard-metrics">
               {/* Total Calls Card */}
               <Card className="border-slate-200 shadow-sm hover:shadow-md transition-all duration-200 group">
                 <CardContent className="p-6">
@@ -328,6 +329,7 @@ export default function Dashboard() {
               <Card 
                 className="border-slate-200 shadow-sm hover:shadow-md transition-all duration-200 group cursor-pointer"
                 onClick={() => setCreditsModalOpen(true)}
+                data-tour="credits-card"
               >
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between">
@@ -348,12 +350,32 @@ export default function Dashboard() {
                       View details →
                     </span>
                   </div>
+                  {/* Tour completion prompt for users with no credits */}
+                  {remainingCredits <= 0 && (profile?.tour_completed === false || profile?.tour_completed === null) && (
+                    <div className="mt-4 pt-4 border-t border-slate-200">
+                      <p className="text-xs text-slate-600 mb-2">
+                        <Sparkles className="h-3 w-3 inline mr-1 text-blue-600" />
+                        Complete the onboarding tour to get 100 free credits!
+                      </p>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          localStorage.setItem("onboarding_tour_active", "true");
+                          localStorage.setItem("onboarding_tour_step", "0");
+                          window.location.reload();
+                        }}
+                        className="text-xs text-blue-600 hover:text-blue-700 font-medium underline"
+                      >
+                        Start Tour →
+                      </button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
 
             {/* Charts Section */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6" data-tour="dashboard-charts">
               {/* Activity Chart */}
               <Card className="col-span-1 lg:col-span-2 border-slate-200 shadow-sm">
                 <CardHeader>
@@ -502,7 +524,7 @@ export default function Dashboard() {
             {/* Bottom Section */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Recent Activity Feed */}
-              <Card className="col-span-1 lg:col-span-2 border-slate-200 shadow-sm">
+              <Card className="col-span-1 lg:col-span-2 border-slate-200 shadow-sm" data-tour="recent-activity">
                 <CardHeader className="border-b border-slate-100 pb-4">
                   <div className="flex items-center justify-between">
                     <div>

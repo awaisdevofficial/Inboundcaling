@@ -125,6 +125,7 @@ router.post('/signup', async (req, res) => {
     trialExpirationDate.setDate(trialExpirationDate.getDate() + 7);
 
     // Create or update profile
+    // Credits will be deposited when user completes the onboarding tour
     const profileData = {
       user_id: userId,
       email: userEmail,
@@ -133,10 +134,11 @@ router.post('/signup', async (req, res) => {
       retell_api_key: process.env.RETELL_API_KEY || null,
       total_minutes_used: 0,
       Total_credit: 0,
-      Remaning_credits: 100, // 100 free trial credits
+      Remaning_credits: 0, // Credits will be given after tour completion
       is_deactivated: false,
       payment_status: 'unpaid',
       trial_credits_expires_at: trialExpirationDate.toISOString(),
+      tour_completed: false, // User needs to complete tour to get credits
       updated_at: new Date().toISOString(),
       last_activity_at: new Date().toISOString(),
     };
@@ -154,31 +156,90 @@ router.post('/signup', async (req, res) => {
         ignoreDuplicates: false,
       });
 
-    // Log profile errors but don't block signup (profile can be updated later)
-    if (profileError && 
-        !profileError.message?.includes('duplicate') && 
-        !profileError.message?.includes('already exists')) {
-      console.warn('Profile creation warning:', profileError);
+    // Log profile errors and throw if it's a critical error
+    if (profileError) {
+      console.error('Profile creation error:', {
+        error: profileError,
+        message: profileError.message,
+        details: profileError.details,
+        hint: profileError.hint,
+        code: profileError.code,
+        profileData: profileData,
+      });
+      
+      // If it's not a duplicate/conflict error, this is a real problem
+      if (!profileError.message?.includes('duplicate') && 
+          !profileError.message?.includes('already exists') &&
+          !profileError.message?.includes('conflict')) {
+        // This is a critical error - throw it so the user gets proper feedback
+        throw new Error(`Database error creating new user: ${profileError.message || 'Unknown database error'}`);
+      }
     }
+
+    // Credits will be deposited when user completes the onboarding tour
+    // No automatic credit deposit on signup
 
     // Generate 6-digit OTP code
     const otpCode = crypto.randomInt(100000, 999999).toString();
     const otpExpiresAt = new Date();
     otpExpiresAt.setMinutes(otpExpiresAt.getMinutes() + 10); // OTP expires in 10 minutes
 
-    // Store OTP in database (using dedicated email_verification_code field)
-    try {
-      await supabaseAdmin
-        .from('profiles')
-        .update({
-          email_verification_code: otpCode,
-          email_verification_sent_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('user_id', userId);
-    } catch (otpError) {
-      console.warn('Failed to store OTP in database:', otpError);
-      // Continue anyway - we'll try to send email
+    // Store OTP in dedicated email_verification_otps table
+    if (!supabaseAdmin) {
+      console.error('Cannot store OTP: supabaseAdmin client not initialized');
+    } else {
+      try {
+        // First, mark any existing OTPs for this user as used
+        const { error: updateError } = await supabaseAdmin
+          .from('email_verification_otps')
+          .update({ used: true })
+          .eq('user_id', userId)
+          .eq('used', false);
+
+        if (updateError) {
+          console.warn('Warning: Failed to mark existing OTPs as used:', updateError);
+        }
+
+        // Insert new OTP
+        const { data: insertedData, error: otpInsertError } = await supabaseAdmin
+          .from('email_verification_otps')
+          .insert({
+            user_id: userId,
+            email: email.toLowerCase(),
+            otp_code: otpCode,
+            expires_at: otpExpiresAt.toISOString(),
+            used: false,
+          })
+          .select();
+
+        if (otpInsertError) {
+          console.error('Failed to store OTP in database:', {
+            error: otpInsertError,
+            message: otpInsertError.message,
+            details: otpInsertError.details,
+            hint: otpInsertError.hint,
+            code: otpInsertError.code,
+          });
+          throw otpInsertError;
+        }
+        
+        if (insertedData && insertedData.length > 0) {
+          console.log('OTP stored successfully in email_verification_otps table:', {
+            userId,
+            email: email.toLowerCase(),
+            otpId: insertedData[0].id,
+          });
+        } else {
+          console.warn('OTP insert returned no data, but no error was reported');
+        }
+      } catch (otpError) {
+        console.error('Exception while storing OTP in database:', {
+          error: otpError,
+          message: otpError?.message,
+          stack: otpError?.stack,
+        });
+        // Continue anyway - we'll try to send email
+      }
     }
 
     // Send verification email via SMTP
@@ -240,8 +301,21 @@ router.post('/signup', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Signup error:', error);
-    res.status(500).json({
+    console.error('Signup error:', {
+      error: error,
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+    });
+    
+    // Return 400 for client errors (validation, database constraints, etc.)
+    // Return 500 for server errors
+    const statusCode = error.message?.includes('Database error') || 
+                      error.message?.includes('constraint') ||
+                      error.message?.includes('duplicate') ||
+                      error.message?.includes('already exists') ? 400 : 500;
+    
+    res.status(statusCode).json({
       success: false,
       error: error.message || 'An unexpected error occurred during signup',
     });
@@ -416,24 +490,30 @@ router.post('/verify-email', async (req, res) => {
       });
     }
 
-    // Verify OTP from database (stored in email_verification_code field)
-    const { data: profile, error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .select('email_verification_code, email_verification_sent_at')
+    // Verify OTP from dedicated email_verification_otps table
+    const { data: otpRecord, error: otpError } = await supabaseAdmin
+      .from('email_verification_otps')
+      .select('id, otp_code, created_at, expires_at, used, verified_at')
       .eq('user_id', user.id)
+      .eq('email', email.toLowerCase())
+      .eq('used', false)
+      .is('verified_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
-    if (profileError) {
-      console.error('Error fetching profile for OTP verification:', profileError);
+    if (otpError) {
+      console.error('Error fetching OTP from database:', otpError);
     }
 
-    const storedOtp = profile?.email_verification_code;
-    const otpSentAt = profile?.email_verification_sent_at;
+    const storedOtp = otpRecord?.otp_code;
+    const otpExpiresAt = otpRecord?.expires_at ? new Date(otpRecord.expires_at) : null;
+    const now = new Date();
 
     // Check if OTP exists and is valid
     let verificationData = null; // Store verification result for session data
     
-    if (!storedOtp) {
+    if (!storedOtp || !otpRecord) {
       // Fallback to Supabase OTP verification if database OTP not found
       console.log('No OTP found in database, trying Supabase verification...');
       const { data, error } = await supabaseAdmin.auth.verifyOtp({
@@ -475,18 +555,12 @@ router.post('/verify-email', async (req, res) => {
         });
       }
 
-      // Check if OTP is expired (10 minutes)
-      if (otpSentAt) {
-        const sentTime = new Date(otpSentAt);
-        const now = new Date();
-        const tenMinutesAgo = new Date(now.getTime() - 10 * 60 * 1000);
-
-        if (sentTime < tenMinutesAgo) {
-          return res.status(400).json({
-            success: false,
-            error: 'Verification code has expired. Please request a new one.',
-          });
-        }
+      // Check if OTP is expired
+      if (otpExpiresAt && now > otpExpiresAt) {
+        return res.status(400).json({
+          success: false,
+          error: 'Verification code has expired. Please request a new one.',
+        });
       }
 
       // OTP is valid - confirm email in Supabase
@@ -504,19 +578,22 @@ router.post('/verify-email', async (req, res) => {
         console.error('Exception confirming email:', confirmException);
       }
 
-      // Clear OTP from database after successful verification
-      await supabaseAdmin
-        .from('profiles')
-        .update({
-          email_verification_code: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('user_id', user.id);
+      // Mark OTP as used and set verified_at timestamp after successful verification
+      if (otpRecord?.id) {
+        await supabaseAdmin
+          .from('email_verification_otps')
+          .update({
+            used: true,
+            verified_at: now.toISOString(),
+          })
+          .eq('id', otpRecord.id);
+        console.log('OTP marked as used and verified in email_verification_otps table');
+      }
     }
 
     // Use user.id (user is defined in both code paths)
     const userId = user.id;
-    const now = new Date();
+    // Note: 'now' is already declared earlier in this function
 
     // Get fresh user data and session
     let verifiedUser = user;
@@ -727,6 +804,8 @@ router.post('/resend-verification', async (req, res) => {
     // Generate new 6-digit OTP code
     const otpCode = crypto.randomInt(100000, 999999).toString();
     const now = currentTime;
+    const otpExpiresAt = new Date(now);
+    otpExpiresAt.setMinutes(otpExpiresAt.getMinutes() + 10); // OTP expires in 10 minutes
 
     // Get user's full name from profile
     const { data: userProfile } = await supabaseAdmin
@@ -737,15 +816,63 @@ router.post('/resend-verification', async (req, res) => {
 
     const fullName = userProfile?.full_name || '';
 
-    // Store OTP in database (using dedicated email_verification_code field)
-    await supabaseAdmin
-      .from('profiles')
-      .update({
-        email_verification_code: otpCode,
-        email_verification_sent_at: now.toISOString(),
-        updated_at: now.toISOString(),
-      })
-      .eq('user_id', user.id);
+    // Store OTP in dedicated email_verification_otps table
+    if (!supabaseAdmin) {
+      console.error('Cannot store OTP: supabaseAdmin client not initialized');
+    } else {
+      try {
+        // First, mark any existing OTPs for this user as used
+        const { error: updateError } = await supabaseAdmin
+          .from('email_verification_otps')
+          .update({ used: true })
+          .eq('user_id', user.id)
+          .eq('used', false);
+
+        if (updateError) {
+          console.warn('Warning: Failed to mark existing OTPs as used:', updateError);
+        }
+
+        // Insert new OTP
+        const { data: insertedData, error: otpInsertError } = await supabaseAdmin
+          .from('email_verification_otps')
+          .insert({
+            user_id: user.id,
+            email: email.toLowerCase(),
+            otp_code: otpCode,
+            expires_at: otpExpiresAt.toISOString(),
+            used: false,
+          })
+          .select();
+
+        if (otpInsertError) {
+          console.error('Failed to store OTP in database:', {
+            error: otpInsertError,
+            message: otpInsertError.message,
+            details: otpInsertError.details,
+            hint: otpInsertError.hint,
+            code: otpInsertError.code,
+          });
+          throw otpInsertError;
+        }
+        
+        if (insertedData && insertedData.length > 0) {
+          console.log('OTP stored successfully in email_verification_otps table:', {
+            userId: user.id,
+            email: email.toLowerCase(),
+            otpId: insertedData[0].id,
+          });
+        } else {
+          console.warn('OTP insert returned no data, but no error was reported');
+        }
+      } catch (otpError) {
+        console.error('Exception while storing OTP in database:', {
+          error: otpError,
+          message: otpError?.message,
+          stack: otpError?.stack,
+        });
+        // Continue anyway - we'll try to send email
+      }
+    }
 
     // Check if SMTP is configured
     const smtpConfigured = !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD);
