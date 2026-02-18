@@ -7,6 +7,7 @@ import {
 } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { authApi } from "@/services/api";
 
 interface AuthContextType {
   user: User | null;
@@ -18,6 +19,7 @@ interface AuthContextType {
     password: string,
     fullName: string,
     timezone: string,
+    phoneNumber?: string,
   ) => Promise<{ error: Error | null; user: User | null }>;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
@@ -74,199 +76,106 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     password: string,
     fullName: string,
     timezone: string,
+    phoneNumber?: string,
   ) => {
-    const maxRetries = 2; // 3 total attempts (0, 1, 2)
-    const baseDelay = 500;
-    let authData = null;
-    let authError = null;
-
-    // Retry loop for handling network issues
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              full_name: fullName,
-            },
-          },
-        });
-
-        // Assign response to variables
-        authData = data;
-        authError = error;
-
-        // Early exit on success
-        if (!authError && authData?.user) {
-          break;
-        }
-
-        // If we got an error, check if it's retryable
-        if (authError) {
-          const errorMsg = authError.message || String(authError) || "";
-          const isRetryableError = 
-            errorMsg.includes("timeout") || 
-            errorMsg.includes("504") || 
-            errorMsg.includes("Gateway") ||
-            errorMsg.includes("Failed to fetch") ||
-            errorMsg.includes("network") ||
-            errorMsg.includes("ECONNRESET");
-
-          // Don't retry on non-retryable errors (like email already exists, invalid password, etc.)
-          if (!isRetryableError || attempt === maxRetries) {
-            break;
-          }
-
-          // Wait before retrying (exponential backoff) - only if not last attempt
-          if (attempt < maxRetries) {
-            const delay = baseDelay * Math.pow(2, attempt);
-            await new Promise(resolve => setTimeout(resolve, delay));
-          }
-        }
-      } catch (error: any) {
-        // Handle network errors, timeouts, and other exceptions
-        const errorMessage = error?.message || String(error) || "";
-        const isRetryableError = 
-          errorMessage.includes("timeout") || 
-          errorMessage.includes("504") || 
-          errorMessage.includes("Gateway") ||
-          errorMessage.includes("Failed to fetch") ||
-          errorMessage.includes("network") ||
-          errorMessage.includes("ECONNRESET");
-
-        if (!isRetryableError || attempt === maxRetries) {
-          authError = isRetryableError
-            ? new Error("The server is taking too long to respond. Please check your internet connection and try again.")
-            : (error instanceof Error ? error : new Error("An unexpected error occurred during signup."));
-          break;
-        }
-
-        // Wait before retrying - only if not last attempt
-        if (attempt < maxRetries) {
-          const delay = baseDelay * Math.pow(2, attempt);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
-    }
-
-    // Handle errors after retry loop
-    if (authError) {
-      // Handle email rate limit error specifically
-      if (authError.message?.includes("over_email_send_rate_limit") || 
-          authError.message?.includes("email rate limit")) {
-        return { 
-          error: new Error("Email rate limit exceeded. Please wait a few minutes before trying again, or contact support if you need immediate access."),
-          user: null,
-        };
-      }
-      
-      // Handle timeout and gateway errors
-      const errorMsg = authError.message || String(authError) || "";
-      if (errorMsg.includes("timeout") || 
-          errorMsg.includes("504") || 
-          errorMsg.includes("Gateway") ||
-          errorMsg.includes("Failed to fetch")) {
-        return {
-          error: new Error("The server is taking too long to respond after multiple attempts. Please check your internet connection and try again later."),
-          user: null,
-        };
-      }
-      
-      return { error: authError, user: null };
-    }
-
-    // Check if we have valid user data
-    if (!authData?.user) {
-      return { error: new Error("User creation failed - no user data returned"), user: null };
-    }
-
-    // Create profile using upsert for better performance (handles both insert and update)
-    const defaultRetellApiKey = import.meta.env.VITE_RETELL_API_KEY || null;
-    const userId = authData.user.id;
-    const userEmail = authData.user.email || email;
-    
     try {
-      // Calculate trial expiration date (1 week from now)
-      const trialExpirationDate = new Date();
-      trialExpirationDate.setDate(trialExpirationDate.getDate() + 7);
+      // Call backend API for signup
+      const response = await authApi.signup({
+        email,
+        password,
+        fullName,
+        timezone,
+        phoneNumber,
+      });
 
-      // Use upsert instead of check + insert for better performance
-      // This will insert if not exists, or update if exists (idempotent)
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .upsert({
-          user_id: userId,
-          email: userEmail,
-          full_name: fullName,
-          timezone: timezone,
-          retell_api_key: defaultRetellApiKey,
-          total_minutes_used: 0,
-          Total_credit: 0,
-          Remaning_credits: 0,
-          is_deactivated: false,
-          payment_status: 'unpaid',
-          trial_credits_expires_at: trialExpirationDate.toISOString(),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          last_activity_at: new Date().toISOString(),
-        }, {
-          onConflict: 'user_id',
-          ignoreDuplicates: false
-        });
+      if (!response.success || !response.data) {
+        // Handle specific error types
+        let errorMessage = response.error || "Failed to create account";
+        
+        if (errorMessage.includes("already exists") || errorMessage.includes("already registered")) {
+          errorMessage = "An account with this email already exists";
+        } else if (errorMessage.includes("rate limit")) {
+          errorMessage = "Email rate limit exceeded. Please wait a few minutes before trying again.";
+        } else if (errorMessage.includes("timeout") || errorMessage.includes("504") || errorMessage.includes("Gateway")) {
+          errorMessage = "The server is taking too long to respond. Please try again in a moment.";
+        }
 
-      // Only return error if profile creation fails critically
-      // Don't block signup for minor profile issues (like duplicates)
-      if (profileError && 
-          !profileError.message?.includes("duplicate") && 
-          !profileError.message?.includes("already exists")) {
-        // Log error but don't block signup - profile can be created later
-        console.warn("Profile creation warning:", profileError);
+        return {
+          error: new Error(errorMessage),
+          user: null,
+        };
       }
-    } catch (profileException) {
-      // Catch any unexpected errors during profile creation
-      // Don't block signup - user account is already created
-      console.warn("Profile creation exception:", profileException);
-    }
 
-    return { error: null, user: authData?.user ?? null };
+      // Try to get user from Supabase to maintain compatibility
+      // Note: The backend creates the user, but we may not have a session yet
+      // So we'll return null for user and let the email verification flow handle it
+      // The user will be available after email verification
+      return { 
+        error: null, 
+        user: null, // User will be available after email verification
+      };
+    } catch (error: any) {
+      // Handle network errors
+      let errorMessage = error.message || "An unexpected error occurred during signup";
+      
+      if (errorMessage.includes("Failed to fetch") || errorMessage.includes("NetworkError")) {
+        errorMessage = "Network error. Please check your internet connection and try again.";
+      }
+
+      return {
+        error: new Error(errorMessage),
+        user: null,
+      };
+    }
   };
 
   const signIn = async (email: string, password: string) => {
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      // Call backend API for signin
+      const response = await authApi.signin({
+        email,
+        password,
+      });
 
-    if (authError) {
-      return { error: authError };
-    }
-
-    // Check if account is deactivated
-    if (authData.user) {
-      try {
-        const { data: profile, error: profileError } = await supabase
-          .from("profiles")
-          .select("is_deactivated")
-          .eq("user_id", authData.user.id)
-          .maybeSingle();
-
-        if (!profileError && profile?.is_deactivated) {
-          // Sign out immediately if account is deactivated
-          await supabase.auth.signOut();
-          return {
-            error: new Error(
-              "Your account has been deactivated. Please contact support to reactivate your account."
-            ),
-          };
+      if (!response.success || !response.data) {
+        // Handle specific error types
+        let errorMessage = response.error || "Failed to sign in";
+        
+        if (errorMessage.includes("Invalid email or password") || errorMessage.includes("Invalid login credentials")) {
+          errorMessage = "Invalid email or password";
+        } else if (errorMessage.includes("Email not confirmed") || errorMessage.includes("verify your email")) {
+          errorMessage = "Please verify your email before signing in";
+        } else if (errorMessage.includes("deactivated")) {
+          errorMessage = "Your account has been deactivated. Please contact support to reactivate your account.";
         }
-      } catch (error) {
-        // If we can't check the profile, allow login (fail open for better UX)
-        console.warn("Could not verify account status:", error);
-      }
-    }
 
-    return { error: null };
+        return { error: new Error(errorMessage) };
+      }
+
+      // Set session in Supabase using the tokens from backend
+      if (response.data.session) {
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: response.data.session.access_token,
+          refresh_token: response.data.session.refresh_token,
+        });
+
+        if (sessionError) {
+          console.warn("Failed to set Supabase session:", sessionError);
+          // Continue anyway - the backend authenticated successfully
+        }
+      }
+
+      return { error: null };
+    } catch (error: any) {
+      // Handle network errors
+      let errorMessage = error.message || "An unexpected error occurred during sign in";
+      
+      if (errorMessage.includes("Failed to fetch") || errorMessage.includes("NetworkError")) {
+        errorMessage = "Network error. Please check your internet connection and try again.";
+      }
+
+      return { error: new Error(errorMessage) };
+    }
   };
 
   const signOut = async () => {
@@ -285,7 +194,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider");
+    // Provide a more helpful error message
+    console.error("useAuth must be used within an AuthProvider. Make sure AuthProvider wraps your component tree.");
+    throw new Error("useAuth must be used within an AuthProvider. Please check that AuthProvider is wrapping your app.");
   }
   return context;
 }

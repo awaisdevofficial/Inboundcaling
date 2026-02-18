@@ -30,7 +30,7 @@ export type UsageType = "call" | "sms" | "ai_analysis" | "phone_number_rental" |
 
 export interface BotConfig {
   // LLM Configuration
-  llm_id?: string; // Retell LLM ID
+  llm_id?: string; // Genie LLM ID
   model?: string; // Model name (e.g., "gpt-4", "gpt-3.5-turbo")
   model_temperature?: number; // 0-2, default 0.7
   max_tokens?: number;
@@ -133,6 +133,7 @@ export interface Call {
   extracted_customer_data?: Record<string, any> | null;
   updated_at?: string | null;
   Scheduled_at?: string | null; // Scheduled call time
+  is_test_call?: boolean; // Indicates if this is a test call
 }
 
 export interface Profile {

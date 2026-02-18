@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
+import { authApi } from "@/services/api";
 
 export default function VerifyEmail() {
   const navigate = useNavigate();
@@ -88,27 +89,40 @@ export default function VerifyEmail() {
     try {
       setLoading(true);
 
-      // Verify OTP with Supabase using type "signup" for email confirmation
-      const { error } = await supabase.auth.verifyOtp({
+      // Verify OTP using backend API
+      const response = await authApi.verifyEmail({
+        email,
         token: otpValue,
-        type: "signup",
-        email: email,
       });
 
-      if (error) {
-        // Handle email rate limit error specifically
-        if (
-          error.message?.includes("over_email_send_rate_limit") ||
-          error.message?.includes("email rate limit")
-        ) {
-          toast({
-            title: "Rate limit exceeded",
-            description: "Email rate limit exceeded. Please try again later.",
-            variant: "destructive",
-          });
-          return;
+      if (!response.success || !response.data) {
+        let errorMessage = response.error || "Invalid verification code. Please try again.";
+        
+        if (errorMessage.includes("rate limit")) {
+          errorMessage = "Email rate limit exceeded. Please try again later.";
+        } else if (errorMessage.includes("invalid") || errorMessage.includes("expired")) {
+          errorMessage = "Invalid or expired verification code. Please request a new one.";
         }
-        throw error;
+
+        toast({
+          title: "Verification Failed",
+          description: errorMessage,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Set session in Supabase if tokens are provided
+      if (response.data.session) {
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: response.data.session.access_token,
+          refresh_token: response.data.session.refresh_token,
+        });
+
+        if (sessionError) {
+          console.warn("Failed to set Supabase session:", sessionError);
+          // Continue anyway - verification was successful
+        }
       }
 
       toast({
@@ -119,7 +133,7 @@ export default function VerifyEmail() {
     } catch (error: any) {
       toast({
         title: "Verification Failed",
-        description: error.message || "Invalid verification code. Please try again.",
+        description: error.message || "An unexpected error occurred. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -139,46 +153,41 @@ export default function VerifyEmail() {
     }
 
     try {
-      // Throttle resend requests - prevent rapid successive sends
-      const lastResendTime = localStorage.getItem("last_email_resend_time");
-      const now = Date.now();
+      // Call backend API - rate limiting is handled on the backend
+      const response = await authApi.resendVerification(email);
 
-      if (lastResendTime && now - parseInt(lastResendTime) < 60000) {
-        const secondsLeft = Math.ceil(
-          (60000 - (now - parseInt(lastResendTime))) / 1000,
-        );
+      if (!response.success) {
+        let errorMessage = response.error || "Failed to resend code. Please try again.";
+        
+        // Log full error for debugging
+        console.error('Resend verification error:', {
+          error: response.error,
+          message: response.message,
+          data: response.data,
+          fullResponse: response,
+        });
+        
+        // Handle rate limiting from backend
+        if (errorMessage.includes("wait") && response.data?.retryAfter) {
+          errorMessage = `Please wait ${response.data.retryAfter} seconds before requesting another code.`;
+        } else if (errorMessage.includes("rate limit")) {
+          errorMessage = "Too many emails sent. Please wait a few minutes before requesting another code.";
+        } else if (errorMessage.includes("already verified") || errorMessage.includes("already confirmed")) {
+          errorMessage = "This email is already verified. You can sign in directly.";
+          // Redirect to signin after a moment
+          setTimeout(() => navigate("/signin"), 2000);
+        } else if (errorMessage.includes("not found") || errorMessage.includes("No account")) {
+          errorMessage = "No account found with this email. Please sign up first.";
+          setTimeout(() => navigate("/signup"), 2000);
+        }
+
         toast({
-          title: "Please wait",
-          description: `Please wait ${secondsLeft} seconds before requesting another code.`,
+          title: "Error",
+          description: errorMessage,
           variant: "destructive",
         });
         return;
       }
-
-      const { error } = await supabase.auth.resend({
-        type: "signup",
-        email: email,
-      });
-
-      if (error) {
-        // Handle email rate limit error specifically
-        if (
-          error.message?.includes("over_email_send_rate_limit") ||
-          error.message?.includes("email rate limit")
-        ) {
-          toast({
-            title: "Rate limit exceeded",
-            description:
-              "Too many emails sent. Please wait a few minutes before requesting another code.",
-            variant: "destructive",
-          });
-          return;
-        }
-        throw error;
-      }
-
-      // Store last resend time
-      localStorage.setItem("last_email_resend_time", now.toString());
 
       // Clear OTP inputs
       setOtp(["", "", "", "", "", ""]);

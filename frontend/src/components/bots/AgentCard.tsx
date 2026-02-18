@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Bot,
   Trash2,
@@ -7,6 +8,7 @@ import {
   Mic,
   PhoneIncoming,
   PhoneOutgoing,
+  Phone,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { formatDistanceToNow } from "date-fns";
 import type { Bot as BotType } from "@/types/database";
+import { TestAgentModal } from "./TestAgentModal";
 
 interface AgentCardProps {
   bot: BotType;
@@ -33,6 +36,8 @@ export function AgentCard({
   onDelete,
   onViewDetails,
 }: AgentCardProps) {
+  const [testModalOpen, setTestModalOpen] = useState(false);
+
   // Use schema fields directly, fallback to bot_config for backward compatibility
   const voiceId = bot.voice_id || bot.bot_config?.voice_id;
   const voiceName =
@@ -59,6 +64,11 @@ export function AgentCard({
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
     onDelete(bot);
+  };
+
+  const handleTestAgent = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTestModalOpen(true);
   };
 
   return (
@@ -102,6 +112,10 @@ export function AgentCard({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-40">
+              <DropdownMenuItem onClick={handleTestAgent}>
+                <Phone className="mr-2 h-4 w-4" />
+                Test Agent
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={handleEdit}>
                 <Edit2 className="mr-2 h-4 w-4" />
                 Edit
@@ -166,23 +180,39 @@ export function AgentCard({
           </div>
         )}
 
-        <div className="flex items-center justify-between pt-4 border-t border-border/50 mt-auto">
+        <div className="flex items-center justify-between pt-4 border-t border-border/50 mt-auto gap-2">
           <p className="text-xs text-muted-foreground">
             {formatDistanceToNow(new Date(bot.created_at), {
               addSuffix: true,
             })}
           </p>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-3 text-xs hover:bg-primary/10 hover:text-primary transition-colors duration-200"
-            onClick={handleEdit}
-          >
-            <Settings2 className="h-3.5 w-3.5 mr-1.5" />
-            Configure
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-3 text-xs hover:bg-green-50 hover:text-green-600 hover:border-green-300 transition-colors duration-200"
+              onClick={handleTestAgent}
+            >
+              <Phone className="h-3.5 w-3.5 mr-1.5" />
+              Test
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 px-3 text-xs hover:bg-primary/10 hover:text-primary transition-colors duration-200"
+              onClick={handleEdit}
+            >
+              <Settings2 className="h-3.5 w-3.5 mr-1.5" />
+              Configure
+            </Button>
+          </div>
         </div>
       </CardContent>
+      <TestAgentModal
+        open={testModalOpen}
+        onOpenChange={setTestModalOpen}
+        bot={bot}
+      />
     </Card>
   );
 }

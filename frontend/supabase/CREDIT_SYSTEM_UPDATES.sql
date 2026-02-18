@@ -337,6 +337,7 @@ BEGIN
     email,
     full_name,
     timezone,
+    retell_api_key,
     total_minutes_used,
     "Total_credit",
     "Remaning_credits",
@@ -351,6 +352,7 @@ BEGIN
     NEW.email,
     COALESCE(NEW.raw_user_meta_data->>'full_name', ''),
     'UTC',
+    NULL,  -- retell_api_key - can be set later by the user
     0,
     0,
     100,  -- 100 free trial credits

@@ -51,49 +51,32 @@ export function AIPromptSidebar() {
     setIsGenerating(true);
     
     try {
-      // Example OpenAI API call structure
-      // You'll need to add OPENAI_API_KEY to your .env file
-      const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
-      
-      if (!apiKey) {
-        toast({
-          title: "Configuration Error",
-          description: "OpenAI API key not found. Please add VITE_OPENAI_API_KEY=sk-your-key-here to your .env file. Get your key from https://platform.openai.com/api-keys",
-          variant: "destructive",
-        });
-        setIsGenerating(false);
-        return;
-      }
+      const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      // Call backend API instead of OpenAI directly
+      const response = await fetch(`${BACKEND_URL}/api/ai-prompt/sidebar-generate`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4",
-          messages: [
-            {
-              role: "system",
-              content: "You are an expert at creating AI voice agent prompts. Generate professional, effective prompts for voice agents based on business information.",
-            },
-            {
-              role: "user",
-              content: `Generate a comprehensive AI voice agent prompt for a ${businessType} business. Business description: ${businessDescription}. The prompt should be professional, clear, and effective for handling customer inquiries.`,
-            },
-          ],
-          temperature: 0.7,
-          max_tokens: 1000,
+          businessType,
+          businessDescription,
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `API error: ${response.statusText}`);
       }
 
       const data = await response.json();
-      const generatedText = data.choices[0]?.message?.content || "";
+      
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to generate prompt');
+      }
+
+      const generatedText = data.generatedPrompt || "";
       
       setGeneratedPrompt(generatedText);
       
@@ -175,63 +158,31 @@ export function AIPromptSidebar() {
     setIsFormatting(true);
     
     try {
-      // Static pre-designed format instructions
-      const formatInstructions = `Format the following prompt according to these guidelines:
-1. Use clear, concise language
-2. Structure with bullet points or numbered lists where appropriate
-3. Include specific instructions for tone and behavior
-4. Add context about the business or service
-5. Include examples of good responses
-6. Ensure professional and friendly tone
+      const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
-Original Prompt:
-${promptToFormat}
-
-Formatted Prompt:`;
-
-      const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
-      
-      if (!apiKey) {
-        // If no API key, use a simple formatting approach
-        const formatted = formatInstructions.split('\n').filter(line => line.trim()).join('\n');
-        setFormattedPrompt(formatted);
-        setIsFormatting(false);
-        toast({
-          title: "Formatted",
-          description: "Prompt formatted using basic formatting rules",
-        });
-        return;
-      }
-
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      // Call backend API instead of OpenAI directly
+      const response = await fetch(`${BACKEND_URL}/api/ai-prompt/sidebar-format`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4",
-          messages: [
-            {
-              role: "system",
-              content: "You are an expert at formatting AI prompts. Format prompts to be clear, professional, and effective for voice agents.",
-            },
-            {
-              role: "user",
-              content: formatInstructions,
-            },
-          ],
-          temperature: 0.5,
-          max_tokens: 1500,
+          promptToFormat,
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `API error: ${response.statusText}`);
       }
 
       const data = await response.json();
-      const formattedText = data.choices[0]?.message?.content || "";
+      
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to format prompt');
+      }
+
+      const formattedText = data.formattedPrompt || "";
       
       setFormattedPrompt(formattedText);
       

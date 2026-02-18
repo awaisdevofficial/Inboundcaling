@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Phone, Loader2, Plus, X, Upload, CheckCircle2, Trash2, Clock, Maximize2, Minimize2, Play } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Phone, Loader2, Plus, X, Upload, CheckCircle2, Trash2, Clock, Maximize2, Minimize2, Play, Link2, Unlink, User, Bot } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,13 +7,17 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
+import { useBots } from "@/hooks/useBots";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { callWebhook } from "@/lib/webhook";
+import { Bot as BotType } from "@/types/database";
+import { Profile } from "@/types/database";
 
 interface ImportedNumber {
   id?: string;
@@ -23,11 +27,22 @@ interface ImportedNumber {
   status?: string;
   importStatus?: "pending" | "importing" | "success" | "failed";
   importError?: string;
+  linked_agent?: {
+    id: string;
+    name: string;
+    user_id: string;
+  } | null;
+  owner?: {
+    user_id: string;
+    email: string | null;
+    full_name: string | null;
+  } | null;
 }
 
 export default function PhoneNumbers() {
   const { user } = useAuth();
   const { profile } = useProfile();
+  const { bots, refetch: refetchBots } = useBots();
   const [phoneNumber, setPhoneNumber] = useState("");
   const [terminationUri, setTerminationUri] = useState("");
   const [numberName, setNumberName] = useState("");
@@ -35,43 +50,92 @@ export default function PhoneNumbers() {
   const [isImporting, setIsImporting] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isVideoExpanded, setIsVideoExpanded] = useState(false);
+  const [linkingNumberId, setLinkingNumberId] = useState<string | null>(null);
+  const [userProfiles, setUserProfiles] = useState<Record<string, Profile>>({});
 
-  // Fetch existing numbers from database
-  useEffect(() => {
-    const fetchNumbers = async () => {
-      if (!user) return;
+  // Helper function to refresh phone numbers list
+  const refreshPhoneNumbers = useCallback(async () => {
+    if (!user) return;
 
-      try {
-        const { data, error } = await supabase
-          .from("imported_phone_numbers" as any)
-          .select("*")
-          .eq("user_id", user.id)
-          .order("created_at", { ascending: false });
+    try {
+      const { data: phoneNumbersData, error: phoneError } = await supabase
+        .from("imported_phone_numbers" as any)
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
 
-        if (error) throw error;
+      if (phoneError) throw phoneError;
 
-        setImportedNumbers(
-          (data || []).map((item: any) => ({
-            id: item.id,
-            phone_number: item.phone_number,
-            termination_uri: item.termination_uri,
-            name: item.name || "",
-            status: item.status,
-            importStatus: "success" as const, // Mark as successfully imported since they're in the database
-          }))
-        );
-      } catch (error) {
-        // Removed console.error for security
-        toast({
-          title: "Error",
-          description: "Failed to load phone numbers",
-          variant: "destructive",
-        });
+      const userIds = [...new Set((phoneNumbersData || []).map((p: any) => p.user_id))];
+      let profilesMap: Record<string, Profile> = {};
+
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("user_id, email, full_name")
+          .in("user_id", userIds);
+
+        if (profiles) {
+          profiles.forEach((p: any) => {
+            profilesMap[p.user_id] = p;
+          });
+        }
       }
-    };
 
-    fetchNumbers();
+      setUserProfiles(profilesMap);
+
+      const { data: botsData } = await supabase
+        .from("bots")
+        .select("id, name, agent_number, user_id")
+        .eq("user_id", user.id);
+
+      const phoneToBotMap: Record<string, { id: string; name: string; user_id: string }> = {};
+      (botsData || []).forEach((bot: any) => {
+        if (bot.agent_number) {
+          phoneToBotMap[bot.agent_number] = {
+            id: bot.id,
+            name: bot.name,
+            user_id: bot.user_id,
+          };
+        }
+      });
+
+      const mappedNumbers = (phoneNumbersData || []).map((item: any) => {
+        const linkedAgent = phoneToBotMap[item.phone_number] || null;
+        const owner = profilesMap[item.user_id] ? {
+          user_id: item.user_id,
+          email: profilesMap[item.user_id].email,
+          full_name: profilesMap[item.user_id].full_name,
+        } : null;
+
+        return {
+          id: item.id,
+          phone_number: item.phone_number,
+          termination_uri: item.termination_uri,
+          name: item.name || "",
+          status: item.status,
+          importStatus: "success" as const,
+          linked_agent: linkedAgent,
+          owner: owner,
+        };
+      });
+
+      setImportedNumbers(mappedNumbers);
+    } catch (error) {
+      // Silently fail
+    }
   }, [user]);
+
+  // Fetch existing numbers from database with linked agent information
+  useEffect(() => {
+    refreshPhoneNumbers().catch(() => {
+      toast({
+        title: "Error",
+        description: "Failed to load phone numbers",
+        variant: "destructive",
+      });
+    });
+  }, [user, refreshPhoneNumbers]);
 
   const handleImport = async () => {
     if (!phoneNumber.trim() || !terminationUri.trim()) {
@@ -206,19 +270,8 @@ export default function PhoneNumbers() {
             // The phone number is still successfully saved to database
           }
           
-          const importedNumber: ImportedNumber = {
-            ...number,
-            id: importedNumberId,
-            importStatus: "success",
-          };
-          
-          setImportedNumbers((prev) =>
-            prev.map((n) =>
-              n.phone_number === number.phone_number
-                ? importedNumber
-                : n
-            )
-          );
+          // Refresh the numbers list to get updated agent/user info
+          await refreshPhoneNumbers();
 
           toast({
             title: "✅ Import Successful",
@@ -365,6 +418,108 @@ export default function PhoneNumbers() {
     }
   };
 
+  const handleLinkAgent = async (phoneNumberId: string, phoneNumber: string, botId: string) => {
+    if (!user || !phoneNumberId || !botId) return;
+
+    setLinkingNumberId(phoneNumberId);
+
+    try {
+      // Check if this phone number is already linked to another agent
+      const { data: existingBots, error: checkError } = await supabase
+        .from("bots")
+        .select("id, name, agent_number")
+        .eq("agent_number", phoneNumber)
+        .neq("id", botId);
+
+      if (checkError) throw checkError;
+
+      if (existingBots && existingBots.length > 0) {
+        toast({
+          title: "Error",
+          description: "This phone number is already linked to another agent. Please unlink it first.",
+          variant: "destructive",
+        });
+        setLinkingNumberId(null);
+        return;
+      }
+
+      // Check if the selected bot already has a different phone number
+      const { data: selectedBot, error: botError } = await supabase
+        .from("bots")
+        .select("id, agent_number")
+        .eq("id", botId)
+        .single();
+
+      if (botError) throw botError;
+
+      if (selectedBot.agent_number && selectedBot.agent_number !== phoneNumber) {
+        toast({
+          title: "Error",
+          description: "This agent is already linked to a different phone number. Please unlink it first.",
+          variant: "destructive",
+        });
+        setLinkingNumberId(null);
+        return;
+      }
+
+      // Link the phone number to the agent
+      const { error: updateError } = await supabase
+        .from("bots")
+        .update({ agent_number: phoneNumber })
+        .eq("id", botId)
+        .eq("user_id", user.id);
+
+      if (updateError) throw updateError;
+
+      // Refresh bots and phone numbers
+      await refetchBots();
+      await refreshPhoneNumbers();
+
+      toast({
+        title: "Success",
+        description: "Phone number linked to agent successfully",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to link phone number to agent",
+        variant: "destructive",
+      });
+    } finally {
+      setLinkingNumberId(null);
+    }
+  };
+
+  const handleUnlinkAgent = async (phoneNumberId: string, botId: string) => {
+    if (!user || !phoneNumberId || !botId) return;
+
+    try {
+      // Unlink the phone number from the agent
+      const { error: updateError } = await supabase
+        .from("bots")
+        .update({ agent_number: null })
+        .eq("id", botId)
+        .eq("user_id", user.id);
+
+      if (updateError) throw updateError;
+
+      // Refresh bots and phone numbers
+      await refetchBots();
+      await refreshPhoneNumbers();
+
+      toast({
+        title: "Success",
+        description: "Phone number unlinked from agent successfully",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to unlink phone number from agent",
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <ProtectedRoute>
       <DashboardLayout>
@@ -373,7 +528,7 @@ export default function PhoneNumbers() {
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
             <div className="space-y-1">
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Phone Numbers</h1>
-              <p className="text-slate-500 text-base">Import and manage your phone numbers with termination URIs</p>
+              <p className="text-slate-500 text-base">Import and manage your phone numbers, link them to agents, and view ownership information</p>
             </div>
           </div>
 
@@ -623,22 +778,95 @@ export default function PhoneNumbers() {
                                   <div className="text-xs text-muted-foreground">
                                     URI: {number.termination_uri}
                                   </div>
+                                  
+                                  {/* Owner Information */}
+                                  {number.owner && (
+                                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-200">
+                                      <User className="h-3 w-3 text-slate-500" />
+                                      <span className="text-xs text-slate-600">
+                                        Owner: {number.owner.full_name || number.owner.email || "Unknown"}
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {/* Linked Agent Information */}
+                                  {number.linked_agent ? (
+                                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-200">
+                                      <Bot className="h-3 w-3 text-blue-500" />
+                                      <span className="text-xs text-blue-600 font-medium">
+                                        Linked to: {number.linked_agent.name}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-200">
+                                      <span className="text-xs text-slate-500 italic">
+                                        Not linked to any agent
+                                      </span>
+                                    </div>
+                                  )}
+
                                   {isFailed && number.importError && (
                                     <div className="text-xs text-red-600 dark:text-red-400">
                                       Error: {number.importError}
                                     </div>
                                   )}
                                 </div>
-                                <div className="flex gap-2">
+                                <div className="flex flex-col gap-2">
                                   {isSuccess && number.id && (
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => handleDelete(number.id!)}
-                                      className="text-destructive hover:text-destructive"
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
+                                    <>
+                                      {/* Link/Unlink Agent */}
+                                      {number.linked_agent ? (
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => handleUnlinkAgent(number.id!, number.linked_agent!.id)}
+                                          disabled={linkingNumberId === number.id}
+                                          className="text-orange-600 hover:text-orange-700 border-orange-200 hover:border-orange-300"
+                                        >
+                                          {linkingNumberId === number.id ? (
+                                            <Loader2 className="h-3 w-3 animate-spin" />
+                                          ) : (
+                                            <>
+                                              <Unlink className="h-3 w-3 mr-1" />
+                                              Unlink
+                                            </>
+                                          )}
+                                        </Button>
+                                      ) : (
+                                        <Select
+                                          onValueChange={(botId) => handleLinkAgent(number.id!, number.phone_number, botId)}
+                                          disabled={linkingNumberId === number.id || bots.length === 0}
+                                        >
+                                          <SelectTrigger className="h-8 text-xs">
+                                            <SelectValue placeholder="Link Agent" />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {bots
+                                              .filter(bot => !bot.agent_number || bot.agent_number === number.phone_number)
+                                              .map((bot) => (
+                                                <SelectItem key={bot.id} value={bot.id}>
+                                                  {bot.name}
+                                                </SelectItem>
+                                              ))}
+                                            {bots.filter(bot => !bot.agent_number || bot.agent_number === number.phone_number).length === 0 && (
+                                              <SelectItem value="no-agents" disabled>
+                                                No available agents
+                                              </SelectItem>
+                                            )}
+                                          </SelectContent>
+                                        </Select>
+                                      )}
+                                      
+                                      {/* Delete Button */}
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleDelete(number.id!)}
+                                        className="text-destructive hover:text-destructive"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    </>
                                   )}
                                   {!isImporting && !isSuccess && (
                                     <Button

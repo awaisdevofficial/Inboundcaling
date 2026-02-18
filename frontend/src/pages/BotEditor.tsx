@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Settings, LayoutList, Plus, X, Loader2, Save, Activity, FileText, Phone, Clock, BookOpen, User, Mic, AlertCircle, Zap, Sparkles } from "lucide-react";
+import { ArrowLeft, Settings, LayoutList, Plus, X, Loader2, Save, Activity, FileText, Phone, Clock, BookOpen, User, Mic, AlertCircle, Zap, Sparkles, Eye, CheckCircle, XCircle, PhoneCall, Link2, Unlink, Bot } from "lucide-react";
 import { VoiceSelector } from "@/components/voices/VoiceSelector";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
@@ -13,14 +13,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { TimezoneSelector } from "@/components/TimezoneSelector";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { TranscriptDisplay } from "@/components/transcript/TranscriptDisplay";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import type { Bot } from "@/types/database";
+import { formatDistanceToNow, format } from "date-fns";
+import type { Bot, Call, CallStatus } from "@/types/database";
 
 // Voice interface matching database schema
 interface Voice {
@@ -52,7 +58,7 @@ interface KnowledgeBase {
 export default function BotEditor() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { fetchBot, createBot, updateBot } = useBots();
+  const { fetchBot, createBot, updateBot, refetch: refetchBots } = useBots();
   const { user } = useAuth();
   const { getUserPrompts } = useAIPrompts();
   
@@ -81,10 +87,23 @@ export default function BotEditor() {
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState("edit");
   const [editSection, setEditSection] = useState("details");
+  const [calls, setCalls] = useState<Call[]>([]);
+  const [callsLoading, setCallsLoading] = useState(false);
+  const [selectedCall, setSelectedCall] = useState<Call | null>(null);
+  const [callDetailsOpen, setCallDetailsOpen] = useState(false);
 
   // Dynamic Data State
   const [dbImportedNumbers, setDbImportedNumbers] = useState<string[]>([]);
   const [loadingImportedNumbers, setLoadingImportedNumbers] = useState(false);
+  const [phoneNumbersWithAgents, setPhoneNumbersWithAgents] = useState<Array<{
+    phone_number: string;
+    id: string;
+    linked_agent?: {
+      id: string;
+      name: string;
+    } | null;
+  }>>([]);
+  const [linkingNumberId, setLinkingNumberId] = useState<string | null>(null);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [loadingKnowledgeBases, setLoadingKnowledgeBases] = useState(false);
   const [voices, setVoices] = useState<Voice[]>([]);
@@ -109,26 +128,57 @@ export default function BotEditor() {
     unavailable_days: [] as string[],
   });
 
-  // Fetch Imported Numbers
+  // Fetch Imported Numbers with linked agent information
   useEffect(() => {
     const fetchImportedNumbers = async () => {
       if (!user) {
         setDbImportedNumbers([]);
+        setPhoneNumbersWithAgents([]);
         return;
       }
 
       setLoadingImportedNumbers(true);
       try {
-        const { data, error } = await supabase
+        // Fetch phone numbers
+        const { data: phoneNumbersData, error: phoneError } = await supabase
           .from("imported_phone_numbers")
-          .select("phone_number")
+          .select("id, phone_number")
           .eq("user_id", user.id)
           .eq("status", "active")
           .order("created_at", { ascending: false });
 
-        if (error) throw error;
-        const phoneNumbers = (data || []).map((item: any) => item.phone_number);
+        if (phoneError) throw phoneError;
+
+        const phoneNumbers = (phoneNumbersData || []).map((item: any) => item.phone_number);
         setDbImportedNumbers(phoneNumbers);
+
+        // Fetch bots to find which ones are linked to these phone numbers
+        const { data: botsData, error: botsError } = await supabase
+          .from("bots")
+          .select("id, name, agent_number")
+          .eq("user_id", user.id);
+
+        if (botsError) throw botsError;
+
+        // Create a map of phone_number -> bot
+        const phoneToBotMap: Record<string, { id: string; name: string }> = {};
+        (botsData || []).forEach((bot: any) => {
+          if (bot.agent_number) {
+            phoneToBotMap[bot.agent_number] = {
+              id: bot.id,
+              name: bot.name,
+            };
+          }
+        });
+
+        // Map phone numbers with their linked agents
+        const numbersWithAgents = (phoneNumbersData || []).map((item: any) => ({
+          phone_number: item.phone_number,
+          id: item.id,
+          linked_agent: phoneToBotMap[item.phone_number] || null,
+        }));
+
+        setPhoneNumbersWithAgents(numbersWithAgents);
       } catch (error: any) {
         // Removed console.error for security
       } finally {
@@ -138,6 +188,152 @@ export default function BotEditor() {
 
     fetchImportedNumbers();
   }, [user]);
+
+  // Link/unlink handlers
+  const handleLinkAgent = async (phoneNumberId: string, phoneNumber: string, botId: string) => {
+    if (!user || !phoneNumberId || !botId) return;
+
+    setLinkingNumberId(phoneNumberId);
+
+    try {
+      // Check if this phone number is already linked to another agent
+      const { data: existingBots, error: checkError } = await supabase
+        .from("bots")
+        .select("id, name, agent_number")
+        .eq("agent_number", phoneNumber)
+        .neq("id", botId);
+
+      if (checkError) throw checkError;
+
+      if (existingBots && existingBots.length > 0) {
+        toast.error("This phone number is already linked to another agent. Please unlink it first.");
+        setLinkingNumberId(null);
+        return;
+      }
+
+      // Check if the selected bot already has a different phone number
+      const { data: selectedBot, error: botError } = await supabase
+        .from("bots")
+        .select("id, agent_number")
+        .eq("id", botId)
+        .single();
+
+      if (botError) throw botError;
+
+      if (selectedBot.agent_number && selectedBot.agent_number !== phoneNumber) {
+        toast.error("This agent is already linked to a different phone number. Please unlink it first.");
+        setLinkingNumberId(null);
+        return;
+      }
+
+      // Link the phone number to the agent
+      const { error: updateError } = await supabase
+        .from("bots")
+        .update({ agent_number: phoneNumber })
+        .eq("id", botId)
+        .eq("user_id", user.id);
+
+      if (updateError) throw updateError;
+
+      // Refresh bots and phone numbers
+      await refetchBots();
+      
+      // Refresh phone numbers list
+      const { data: phoneNumbersData } = await supabase
+        .from("imported_phone_numbers")
+        .select("id, phone_number")
+        .eq("user_id", user.id)
+        .eq("status", "active")
+        .order("created_at", { ascending: false });
+
+      const { data: botsData } = await supabase
+        .from("bots")
+        .select("id, name, agent_number")
+        .eq("user_id", user.id);
+
+      const phoneToBotMap: Record<string, { id: string; name: string }> = {};
+      (botsData || []).forEach((bot: any) => {
+        if (bot.agent_number) {
+          phoneToBotMap[bot.agent_number] = {
+            id: bot.id,
+            name: bot.name,
+          };
+        }
+      });
+
+      const numbersWithAgents = (phoneNumbersData || []).map((item: any) => ({
+        phone_number: item.phone_number,
+        id: item.id,
+        linked_agent: phoneToBotMap[item.phone_number] || null,
+      }));
+
+      setPhoneNumbersWithAgents(numbersWithAgents);
+
+      toast.success("Phone number linked to agent successfully");
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to link phone number to agent");
+    } finally {
+      setLinkingNumberId(null);
+    }
+  };
+
+  const handleUnlinkAgent = async (phoneNumberId: string, botId: string) => {
+    if (!user || !phoneNumberId || !botId) return;
+
+    try {
+      // Unlink the phone number from the agent
+      const { error: updateError } = await supabase
+        .from("bots")
+        .update({ agent_number: null })
+        .eq("id", botId)
+        .eq("user_id", user.id);
+
+      if (updateError) throw updateError;
+
+      // Refresh bots
+      await refetchBots();
+
+      // Refresh phone numbers list
+      const { data: phoneNumbersData } = await supabase
+        .from("imported_phone_numbers")
+        .select("id, phone_number")
+        .eq("user_id", user.id)
+        .eq("status", "active")
+        .order("created_at", { ascending: false });
+
+      const { data: botsData } = await supabase
+        .from("bots")
+        .select("id, name, agent_number")
+        .eq("user_id", user.id);
+
+      const phoneToBotMap: Record<string, { id: string; name: string }> = {};
+      (botsData || []).forEach((bot: any) => {
+        if (bot.agent_number) {
+          phoneToBotMap[bot.agent_number] = {
+            id: bot.id,
+            name: bot.name,
+          };
+        }
+      });
+
+      const numbersWithAgents = (phoneNumbersData || []).map((item: any) => ({
+        phone_number: item.phone_number,
+        id: item.id,
+        linked_agent: phoneToBotMap[item.phone_number] || null,
+      }));
+
+      setPhoneNumbersWithAgents(numbersWithAgents);
+
+      // Clear the selected incoming number if it was unlinked
+      if (formData.incoming_number && !phoneToBotMap[formData.incoming_number]) {
+        setFormData({...formData, incoming_number: ""});
+      }
+
+      toast.success("Phone number unlinked from agent successfully");
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to unlink phone number from agent");
+    }
+  };
 
   // Fetch Knowledge Bases
   useEffect(() => {
@@ -205,6 +401,55 @@ export default function BotEditor() {
       loadBot(id);
     }
   }, [id, isCreateMode]);
+
+  // Fetch calls for this bot
+  useEffect(() => {
+    const fetchBotCalls = async () => {
+      if (!bot || !user || isCreateMode) {
+        setCalls([]);
+        return;
+      }
+
+      setCallsLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from("calls")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("bot_id", bot.id)
+          .order("started_at", { ascending: false, nullsFirst: false })
+          .limit(100);
+
+        if (error) throw error;
+        setCalls((data as unknown as Call[]) || []);
+      } catch (error: any) {
+        console.error("Error fetching calls:", error);
+        setCalls([]);
+      } finally {
+        setCallsLoading(false);
+      }
+    };
+
+    if (activeTab === "logs") {
+      fetchBotCalls();
+    }
+  }, [bot, user, activeTab, isCreateMode]);
+
+  const statusConfig: Record<
+    CallStatus,
+    {
+      icon: typeof Phone;
+      label: string;
+      variant: "default" | "secondary" | "destructive" | "outline";
+    }
+  > = {
+    pending: { icon: Clock, label: "Pending", variant: "outline" },
+    in_progress: { icon: PhoneCall, label: "In Progress", variant: "secondary" },
+    completed: { icon: CheckCircle, label: "Completed", variant: "default" },
+    failed: { icon: XCircle, label: "Failed", variant: "destructive" },
+    not_connected: { icon: XCircle, label: "Not Connected", variant: "destructive" },
+    night_time_dont_call: { icon: Clock, label: "Night Time", variant: "outline" },
+  };
 
   // Helper function to check availability instructions in prompt
   const hasAvailabilityInstructions = (prompt: string) => {
@@ -599,16 +844,101 @@ Always check the time FIRST before engaging in any conversation with the caller.
                                   <SelectValue placeholder="Select incoming number" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  {dbImportedNumbers.map((phoneNumber) => (
-                                    <SelectItem key={phoneNumber} value={phoneNumber}>
-                                      <span className="font-medium">{phoneNumber}</span>
+                                  {phoneNumbersWithAgents.map((phoneData) => (
+                                    <SelectItem key={phoneData.phone_number} value={phoneData.phone_number}>
+                                      <div className="flex items-center justify-between w-full">
+                                        <span className="font-medium">{phoneData.phone_number}</span>
+                                        {phoneData.linked_agent && (
+                                          <Badge variant="secondary" className="ml-2 text-xs">
+                                            {phoneData.linked_agent.name}
+                                          </Badge>
+                                        )}
+                                      </div>
                                     </SelectItem>
                                   ))}
-                                  {dbImportedNumbers.length === 0 && !loadingImportedNumbers && (
+                                  {phoneNumbersWithAgents.length === 0 && !loadingImportedNumbers && (
                                     <div className="px-2 py-4 text-sm text-muted-foreground text-center">No numbers available</div>
                                   )}
                                 </SelectContent>
                               </Select>
+                              
+                              {/* Phone Numbers List with Link/Unlink */}
+                              {phoneNumbersWithAgents.length > 0 && (
+                                <div className="mt-3 space-y-2 border-t pt-3">
+                                  <p className="text-xs text-muted-foreground mb-2">Manage phone number links:</p>
+                                  <ScrollArea className="h-[200px]">
+                                    <div className="space-y-2">
+                                      {phoneNumbersWithAgents.map((phoneData) => {
+                                        const isLinked = phoneData.linked_agent !== null;
+                                        const isCurrentBot = !isCreateMode && bot && phoneData.linked_agent?.id === bot.id;
+                                        
+                                        return (
+                                          <div
+                                            key={phoneData.id}
+                                            className="flex items-center justify-between p-2 border rounded-md bg-slate-50"
+                                          >
+                                            <div className="flex-1">
+                                              <div className="flex items-center gap-2">
+                                                <Phone className="h-3 w-3 text-slate-500" />
+                                                <span className="text-sm font-medium">{phoneData.phone_number}</span>
+                                              </div>
+                                              {phoneData.linked_agent ? (
+                                                <div className="flex items-center gap-2 mt-1">
+                                                  <Bot className="h-3 w-3 text-blue-500" />
+                                                  <span className="text-xs text-blue-600">
+                                                    Linked to: {phoneData.linked_agent.name}
+                                                  </span>
+                                                </div>
+                                              ) : (
+                                                <span className="text-xs text-slate-500 mt-1 block">Not linked</span>
+                                              )}
+                                            </div>
+                                            <div className="flex gap-2">
+                                              {isLinked ? (
+                                                <Button
+                                                  variant="outline"
+                                                  size="sm"
+                                                  onClick={() => handleUnlinkAgent(phoneData.id, phoneData.linked_agent!.id)}
+                                                  disabled={linkingNumberId === phoneData.id}
+                                                  className="text-xs h-7 text-orange-600 hover:text-orange-700 border-orange-200 hover:border-orange-300"
+                                                >
+                                                  {linkingNumberId === phoneData.id ? (
+                                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                                  ) : (
+                                                    <>
+                                                      <Unlink className="h-3 w-3 mr-1" />
+                                                      Unlink
+                                                    </>
+                                                  )}
+                                                </Button>
+                                              ) : (
+                                                !isCreateMode && bot && (
+                                                  <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => handleLinkAgent(phoneData.id, phoneData.phone_number, bot.id)}
+                                                    disabled={linkingNumberId === phoneData.id}
+                                                    className="text-xs h-7"
+                                                  >
+                                                    {linkingNumberId === phoneData.id ? (
+                                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                                    ) : (
+                                                      <>
+                                                        <Link2 className="h-3 w-3 mr-1" />
+                                                        Link to this agent
+                                                      </>
+                                                    )}
+                                                  </Button>
+                                                )
+                                              )}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </ScrollArea>
+                                </div>
+                              )}
                             </div>
 
                             {/* Transfer Call To */}
@@ -921,14 +1251,169 @@ Always check the time FIRST before engaging in any conversation with the caller.
             {/* Logs Tab */}
             <TabsContent value="logs" className="mt-6">
               <Card>
-                <CardContent className="pt-6">
-                  <div className="text-center py-12 text-muted-foreground">
-                    <FileText className="h-12 w-12 mx-auto mb-4 opacity-20" />
-                    <h3 className="text-lg font-medium">Call Logs</h3>
-                    <p>Call history and transcripts will appear here.</p>
-                  </div>
+                <CardHeader>
+                  <CardTitle>Call Logs</CardTitle>
+                  <CardDescription>
+                    View all calls (including test calls) for this agent
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {callsLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : calls.length === 0 ? (
+                    <div className="text-center py-12 text-muted-foreground">
+                      <FileText className="h-12 w-12 mx-auto mb-4 opacity-20" />
+                      <h3 className="text-lg font-medium">No Calls Yet</h3>
+                      <p>Call history and transcripts will appear here.</p>
+                    </div>
+                  ) : (
+                    <ScrollArea className="h-[600px]">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Type</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Phone</TableHead>
+                            <TableHead>Duration</TableHead>
+                            <TableHead>Started</TableHead>
+                            <TableHead>Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {calls.map((call) => {
+                            const StatusIcon = statusConfig[call.status as CallStatus]?.icon || Phone;
+                            const statusLabel = statusConfig[call.status as CallStatus]?.label || call.status || "Unknown";
+                            const statusVariant = statusConfig[call.status as CallStatus]?.variant || "outline";
+
+                            return (
+                              <TableRow key={call.id}>
+                                <TableCell>
+                                  {call.is_test_call ? (
+                                    <Badge variant="secondary" className="gap-1">
+                                      <Activity className="h-3 w-3" />
+                                      Test
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline">Regular</Badge>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant={statusVariant} className="gap-1">
+                                    <StatusIcon className="h-3 w-3" />
+                                    {statusLabel}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="font-mono text-sm">
+                                  {call.phone_number === "test_call" ? "Test Call" : call.phone_number}
+                                </TableCell>
+                                <TableCell>
+                                  {call.duration_seconds
+                                    ? `${Math.floor(call.duration_seconds / 60)}:${String(call.duration_seconds % 60).padStart(2, "0")}`
+                                    : "-"}
+                                </TableCell>
+                                <TableCell>
+                                  {call.started_at
+                                    ? formatDistanceToNow(new Date(call.started_at), { addSuffix: true })
+                                    : "-"}
+                                </TableCell>
+                                <TableCell>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      setSelectedCall(call);
+                                      setCallDetailsOpen(true);
+                                    }}
+                                  >
+                                    <Eye className="h-4 w-4 mr-1" />
+                                    View
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </ScrollArea>
+                  )}
                 </CardContent>
               </Card>
+
+              {/* Call Details Dialog */}
+              <Dialog open={callDetailsOpen} onOpenChange={setCallDetailsOpen}>
+                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle>Call Details</DialogTitle>
+                    <DialogDescription>
+                      {selectedCall?.is_test_call ? "Test Call" : "Regular Call"} - {selectedCall?.status}
+                    </DialogDescription>
+                  </DialogHeader>
+                  {selectedCall && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <Label className="text-muted-foreground">Status</Label>
+                          <p className="font-medium">
+                            {statusConfig[selectedCall.status as CallStatus]?.label || selectedCall.status}
+                          </p>
+                        </div>
+                        <div>
+                          <Label className="text-muted-foreground">Phone Number</Label>
+                          <p className="font-medium">
+                            {selectedCall.phone_number === "test_call" ? "Test Call" : selectedCall.phone_number}
+                          </p>
+                        </div>
+                        <div>
+                          <Label className="text-muted-foreground">Duration</Label>
+                          <p className="font-medium">
+                            {selectedCall.duration_seconds
+                              ? `${Math.floor(selectedCall.duration_seconds / 60)}:${String(selectedCall.duration_seconds % 60).padStart(2, "0")}`
+                              : "N/A"}
+                          </p>
+                        </div>
+                        <div>
+                          <Label className="text-muted-foreground">Started</Label>
+                          <p className="font-medium">
+                            {selectedCall.started_at
+                              ? format(new Date(selectedCall.started_at), "PPpp")
+                              : "N/A"}
+                          </p>
+                        </div>
+                        {selectedCall.completed_at && (
+                          <div>
+                            <Label className="text-muted-foreground">Completed</Label>
+                            <p className="font-medium">
+                              {format(new Date(selectedCall.completed_at), "PPpp")}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {selectedCall.transcript && (
+                        <TranscriptDisplay
+                          transcript={selectedCall.transcript}
+                          metadata={selectedCall.metadata || selectedCall.webhook_response}
+                          height="h-96"
+                        />
+                      )}
+
+                      {selectedCall.error_message && (
+                        <div>
+                          <Label className="text-muted-foreground flex items-center gap-2">
+                            <AlertCircle className="h-4 w-4 text-destructive" />
+                            Error
+                          </Label>
+                          <p className="text-sm text-destructive mt-1">
+                            {selectedCall.error_message}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </DialogContent>
+              </Dialog>
             </TabsContent>
           </Tabs>
         </div>

@@ -35,10 +35,12 @@ import {
   Eye,
   FileText,
   AlertCircle,
+  Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { TranscriptDisplay } from "@/components/transcript/TranscriptDisplay";
 import { formatDistanceToNow, format } from "date-fns";
 import { CallStatus, Call, Bot as BotType } from "@/types/database";
 import { toast } from "@/hooks/use-toast";
@@ -329,6 +331,7 @@ export function BotDetailsDialog({
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          <TableHead>Type</TableHead>
                           <TableHead>Contact</TableHead>
                           <TableHead>Phone</TableHead>
                           <TableHead>Status</TableHead>
@@ -346,11 +349,21 @@ export function BotDetailsDialog({
                           };
                           return (
                             <TableRow key={call.id}>
+                              <TableCell>
+                                {call.is_test_call ? (
+                                  <Badge variant="secondary" className="gap-1">
+                                    <Activity className="h-3 w-3" />
+                                    Test
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline">Regular</Badge>
+                                )}
+                              </TableCell>
                               <TableCell className="font-medium">
                                 {call.contact_name || "Unknown"}
                               </TableCell>
                               <TableCell className="text-muted-foreground">
-                                {call.phone_number}
+                                {call.phone_number === "test_call" ? "Test Call" : call.phone_number}
                               </TableCell>
                               <TableCell>
                                 <Badge variant={statusCfg.variant}>
@@ -465,17 +478,11 @@ export function BotDetailsDialog({
               </div>
 
               {selectedCall.transcript && (
-                <div>
-                  <Label className="text-muted-foreground flex items-center gap-2">
-                    <FileText className="h-4 w-4" />
-                    Transcript
-                  </Label>
-                  <ScrollArea className="h-32 mt-2 p-3 bg-secondary/30 rounded-lg">
-                    <p className="text-sm whitespace-pre-wrap">
-                      {selectedCall.transcript}
-                    </p>
-                  </ScrollArea>
-                </div>
+                <TranscriptDisplay
+                  transcript={selectedCall.transcript}
+                  metadata={selectedCall.metadata || selectedCall.webhook_response}
+                  height="h-64"
+                />
               )}
 
               {selectedCall.error_message && (

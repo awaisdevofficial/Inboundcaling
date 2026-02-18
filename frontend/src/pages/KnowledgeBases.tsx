@@ -104,13 +104,13 @@ export default function KnowledgeBases() {
         return;
       }
 
-      // Get user's Retell API key from profile
+      // Get user's Genie API key from profile
       if (!profile?.retell_api_key) {
-        setError("Retell API key not found. Please add your Retell API key in your profile settings.");
+        setError("Genie API key not found. Please add your Genie API key in your profile settings.");
         setCreating(false);
         toast({
           title: "Error",
-          description: "Retell API key not found. Please add your Retell API key in your profile settings.",
+          description: "Genie API key not found. Please add your Genie API key in your profile settings.",
           variant: "destructive",
         });
         return;
@@ -123,7 +123,7 @@ export default function KnowledgeBases() {
         return;
       }
 
-      // Create knowledge base using Retell REST API with file upload
+      // Create knowledge base using Genie REST API with file upload
       const formDataPayload = new FormData();
       formDataPayload.append("knowledge_base_name", formData.knowledge_base_name);
       formDataPayload.append("enable_auto_refresh", String(formData.enable_auto_refresh));
@@ -139,7 +139,7 @@ export default function KnowledgeBases() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || errorData.error_message || errorData.error || `Retell API error: ${response.status}`);
+        throw new Error(errorData.message || errorData.error_message || errorData.error || `Genie API error: ${response.status}`);
       }
       const knowledgeBaseResponse = await response.json();
 
@@ -208,18 +208,18 @@ export default function KnowledgeBases() {
     try {
       setError("");
       
-      // Get user's Retell API key from profile
+      // Get user's Genie API key from profile
       if (!profile?.retell_api_key) {
-        setError("Retell API key not found. Please add your Retell API key in your profile settings.");
+        setError("Genie API key not found. Please add your Genie API key in your profile settings.");
         toast({
           title: "Error",
-          description: "Retell API key not found. Please add your Retell API key in your profile settings.",
+          description: "Genie API key not found. Please add your Genie API key in your profile settings.",
           variant: "destructive",
         });
         return;
       }
 
-      // First, get the knowledge base record to retrieve the Retell knowledge_base_id
+      // First, get the knowledge base record to retrieve the Genie knowledge_base_id
       const { data: kbData, error: fetchError } = await supabase
         .from("knowledge_bases")
         .select("knowledge_base_id")
@@ -234,7 +234,7 @@ export default function KnowledgeBases() {
 
       const retellKnowledgeBaseId = kbData.knowledge_base_id;
 
-      // Delete knowledge base from Retell via REST API
+      // Delete knowledge base from Genie via REST API
       try {
         const response = await fetch(`https://api.retellai.com/delete-knowledge-base/${retellKnowledgeBaseId}`, {
           method: "DELETE",
@@ -245,7 +245,7 @@ export default function KnowledgeBases() {
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || errorData.error || `Retell API error: ${response.status}`);
+          throw new Error(errorData.message || errorData.error || `Genie API error: ${response.status}`);
         }
         retellDeleted = true;
       } catch (error: any) {
@@ -253,7 +253,7 @@ export default function KnowledgeBases() {
         // Removed console.error for security
       }
 
-      // Delete from Supabase database (attempt regardless of Retell deletion result)
+      // Delete from Supabase database (attempt regardless of Genie deletion result)
       try {
         const { error: dbError } = await supabase
           .from("knowledge_bases")
@@ -277,29 +277,29 @@ export default function KnowledgeBases() {
         fetchKnowledgeBases();
         toast({
           title: "Success",
-          description: "Knowledge base deleted successfully from both Retell and database",
+          description: "Knowledge base deleted successfully from both Genie and database",
         });
       } else if (supabaseDeleted && !retellDeleted) {
-        // Supabase deleted but Retell failed
+        // Supabase deleted but Genie failed
         fetchKnowledgeBases();
         toast({
           title: "Partial Success",
-          description: "Knowledge base deleted from database, but failed to delete from Retell. You may need to delete it manually from Retell.",
+          description: "Knowledge base deleted from database, but failed to delete from Genie. You may need to delete it manually from Genie.",
           variant: "destructive",
         });
-        setError(`Retell deletion failed: ${retellError?.message || "Unknown error"}`);
+        setError(`Genie deletion failed: ${retellError?.message || "Unknown error"}`);
       } else if (retellDeleted && !supabaseDeleted) {
-        // Retell deleted but Supabase failed
+        // Genie deleted but Supabase failed
         toast({
           title: "Partial Success",
-          description: "Knowledge base deleted from Retell, but failed to delete from database. You may need to delete it manually from database.",
+          description: "Knowledge base deleted from Genie, but failed to delete from database. You may need to delete it manually from database.",
           variant: "destructive",
         });
         setError(`Database deletion failed: ${supabaseError?.message || "Unknown error"}`);
       } else {
         // Both deletions failed
         throw new Error(
-          `Both deletions failed. Retell: ${retellError?.message || "Unknown error"}, Database: ${supabaseError?.message || "Unknown error"}`
+          `Both deletions failed. Genie: ${retellError?.message || "Unknown error"}, Database: ${supabaseError?.message || "Unknown error"}`
         );
       }
     } catch (error: any) {
@@ -506,7 +506,7 @@ export default function KnowledgeBases() {
                   <CardContent>
                     <div className="flex flex-col gap-3 pt-2">
                       <div className="flex justify-between items-center">
-                        <span className="text-sm text-slate-500">Retell ID:</span>
+                        <span className="text-sm text-slate-500">Genie ID:</span>
                         <span className="text-sm font-semibold text-slate-900 font-mono">{kb.knowledge_base_id}</span>
                       </div>
                       {kb.knowledge_base_texts && kb.knowledge_base_texts.length > 0 && (

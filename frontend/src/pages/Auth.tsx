@@ -119,12 +119,12 @@ export default function Auth() {
   const handleSignUp = async (data: SignUpFormData) => {
     setIsLoading(true);
     const fullName = `${data.firstName} ${data.lastName}`;
-    // Note: phone number is stored but not used in signUp currently
     const { error, user: newUser } = await signUp(
       data.email,
       data.password,
       fullName,
       data.timezone,
+      data.phone,
     );
     setIsLoading(false);
 

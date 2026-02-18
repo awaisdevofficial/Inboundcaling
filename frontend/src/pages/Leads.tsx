@@ -42,6 +42,7 @@ import { useCalls } from "@/hooks/useCalls";
 import { useBots } from "@/hooks/useBots";
 import { useProfile } from "@/hooks/useProfile";
 import { usePageLeads } from "@/hooks/usePageLeads";
+import { TranscriptDisplay } from "@/components/transcript/TranscriptDisplay";
 import { CallStatus } from "@/types/database";
 import {
   formatInUserTimezone,
@@ -1362,17 +1363,11 @@ ${analysis.appointment.appointment_type ? `- Type: ${analysis.appointment.appoin
                     {/* Content Tab */}
                     <TabsContent value="content" className="space-y-4 mt-0">
                       {selectedCall.transcript && (
-                        <div>
-                          <Label className="text-sm font-medium flex items-center gap-2 mb-2 text-slate-900">
-                            <FileText className="h-4 w-4 text-blue-600" />
-                            Transcript
-                          </Label>
-                          <ScrollArea className="h-64 mt-2 p-4 bg-slate-50 rounded-lg border border-slate-200">
-                            <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-700">
-                              {selectedCall.transcript}
-                            </p>
-                          </ScrollArea>
-                        </div>
+                        <TranscriptDisplay
+                          transcript={selectedCall.transcript}
+                          metadata={selectedCall.metadata || selectedCall.webhook_response}
+                          height="h-96"
+                        />
                       )}
 
                       {selectedCall.recording_url && (

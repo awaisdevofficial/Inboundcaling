@@ -252,12 +252,12 @@ export function useRetellData() {
     } catch (err) {
       // Removed console.error for security
       setError(
-        err instanceof Error ? err.message : "Failed to fetch Retell data",
+        err instanceof Error ? err.message : "Failed to fetch Genie data",
       );
       toast({
         title: "Warning",
         description:
-          "Could not fetch complete Retell data. Using available options.",
+          "Could not fetch complete Genie data. Using available options.",
         variant: "default",
       });
     } finally {

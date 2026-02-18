@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Bot, Edit2, Trash2, Mic, PhoneIncoming, PhoneOutgoing, Calendar, MessageSquare } from "lucide-react";
+import { Plus, Bot, Edit2, Trash2, Mic, PhoneIncoming, PhoneOutgoing, Calendar, MessageSquare, Phone } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -8,10 +8,13 @@ import { FeatureGate } from "@/components/FeatureGate";
 import { useBots } from "@/hooks/useBots";
 import type { Bot as BotType } from "@/types/database";
 import { useNavigate } from "react-router-dom";
+import { TestAgentModal } from "@/components/bots/TestAgentModal";
 
 export default function Bots() {
   const { bots, deleteBot } = useBots();
   const navigate = useNavigate();
+  const [testModalOpen, setTestModalOpen] = useState(false);
+  const [selectedBot, setSelectedBot] = useState<BotType | null>(null);
   
   const safeBots = Array.isArray(bots) ? bots : [];
 
@@ -32,6 +35,12 @@ export default function Bots() {
   const handleViewDetails = (bot: BotType) => {
     // Navigate to editor directly for now, which has logs/details
     navigate(`/bots/${bot.id}`);
+  };
+
+  const handleTestAgent = (e: React.MouseEvent, bot: BotType) => {
+    e.stopPropagation();
+    setSelectedBot(bot);
+    setTestModalOpen(true);
   };
 
   return (
@@ -208,6 +217,15 @@ export default function Bots() {
                           <Button
                             variant="ghost"
                             size="sm"
+                            onClick={(e) => handleTestAgent(e, bot)}
+                            className="h-9 w-9 p-0 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-green-50 hover:text-green-600"
+                            title="Test Agent"
+                          >
+                            <Phone className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={(e) => {
                               e.stopPropagation();
                               handleEdit(bot);
@@ -252,6 +270,13 @@ export default function Bots() {
           </div>
         </FeatureGate>
       </DashboardLayout>
+      {selectedBot && (
+        <TestAgentModal
+          open={testModalOpen}
+          onOpenChange={setTestModalOpen}
+          bot={selectedBot}
+        />
+      )}
     </ProtectedRoute>
   );
 }

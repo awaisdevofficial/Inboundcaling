@@ -96,6 +96,7 @@ export default function SignUp() {
         formData.password,
         fullName,
         formData.timezone,
+        formData.phone,
       );
 
       if (signUpError) {

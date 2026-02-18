@@ -31,8 +31,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
@@ -107,9 +105,6 @@ export default function AIPrompt() {
 
   // Service input fields
   const [newService, setNewService] = useState("");
-  const [newFaq, setNewFaq] = useState("");
-  const [newObjection, setNewObjection] = useState("");
-  const [newPolicy, setNewPolicy] = useState("");
 
   // Auto-populate from profile
   useEffect(() => {
@@ -203,11 +198,20 @@ export default function AIPrompt() {
 
   // Handle prompt generation using Agent B
   const handleGeneratePrompt = async () => {
-    // Validate required fields
+    // Validate required fields - only essential ones
     if (!formData.companyName || !formData.agentPurpose || !formData.targetAudience || !formData.callGoal || !formData.callType) {
       toast({
         title: "Validation Error",
         description: "Please fill in all required fields (Company Name, Agent Purpose, Target Audience, Call Goal, Call Type)",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!formData.businessIndustry && !formData.businessDescription) {
+      toast({
+        title: "Validation Error",
+        description: "Please provide either Business Industry or Business Description",
         variant: "destructive",
       });
       return;
@@ -247,11 +251,23 @@ export default function AIPrompt() {
         });
       }
     } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to generate prompt",
-        variant: "destructive",
-      });
+      const errorMessage = error.message || "Failed to generate prompt";
+      
+      // Check if it's an API key issue
+      if (errorMessage.includes("API key") || errorMessage.includes("401") || errorMessage.includes("Unauthorized") || errorMessage.includes("authentication")) {
+        toast({
+          title: "OpenAI API Key Error",
+          description: errorMessage + " Please check your backend .env file and ensure OPENAI_API_KEY is set correctly. Get your key from https://platform.openai.com/api-keys",
+          variant: "destructive",
+          duration: 10000,
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: errorMessage,
+          variant: "destructive",
+        });
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -328,11 +344,23 @@ export default function AIPrompt() {
         description: "Prompt formatted successfully",
       });
     } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to format prompt",
-        variant: "destructive",
-      });
+      const errorMessage = error.message || "Failed to format prompt";
+      
+      // Check if it's an API key issue
+      if (errorMessage.includes("API key") || errorMessage.includes("401") || errorMessage.includes("Unauthorized") || errorMessage.includes("authentication")) {
+        toast({
+          title: "OpenAI API Key Error",
+          description: errorMessage + " Please check your backend .env file and ensure OPENAI_API_KEY is set correctly. Get your key from https://platform.openai.com/api-keys",
+          variant: "destructive",
+          duration: 10000,
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: errorMessage,
+          variant: "destructive",
+        });
+      }
     } finally {
       setIsFormatting(false);
     }
@@ -357,74 +385,6 @@ export default function AIPrompt() {
     }));
   };
 
-  // Add FAQ
-  const addFaq = () => {
-    if (newFaq.trim()) {
-      setFormData(prev => ({
-        ...prev,
-        faqs: [...(prev.faqs || []), newFaq.trim()],
-      }));
-      setNewFaq("");
-    }
-  };
-
-  // Remove FAQ
-  const removeFaq = (index: number) => {
-    setFormData(prev => ({
-      ...prev,
-      faqs: prev.faqs?.filter((_, i) => i !== index) || [],
-    }));
-  };
-
-  // Add objection
-  const addObjection = () => {
-    if (newObjection.trim()) {
-      setFormData(prev => ({
-        ...prev,
-        objections: [...(prev.objections || []), newObjection.trim()],
-      }));
-      setNewObjection("");
-    }
-  };
-
-  // Remove objection
-  const removeObjection = (index: number) => {
-    setFormData(prev => ({
-      ...prev,
-      objections: prev.objections?.filter((_, i) => i !== index) || [],
-    }));
-  };
-
-  // Add policy
-  const addPolicy = () => {
-    if (newPolicy.trim()) {
-      setFormData(prev => ({
-        ...prev,
-        policies: [...(prev.policies || []), newPolicy.trim()],
-      }));
-      setNewPolicy("");
-    }
-  };
-
-  // Remove policy
-  const removePolicy = (index: number) => {
-    setFormData(prev => ({
-      ...prev,
-      policies: prev.policies?.filter((_, i) => i !== index) || [],
-    }));
-  };
-
-  // Toggle required customer field
-  const toggleCustomerField = (field: string) => {
-    setFormData(prev => {
-      const fields = prev.requiredCustomerFields || [];
-      if (fields.includes(field)) {
-        return { ...prev, requiredCustomerFields: fields.filter(f => f !== field) };
-      } else {
-        return { ...prev, requiredCustomerFields: [...fields, field] };
-      }
-    });
-  };
 
   const copyToClipboard = (text: string, type: string) => {
     navigator.clipboard.writeText(text);
@@ -592,8 +552,6 @@ export default function AIPrompt() {
 
   const userPrompts = getUserPrompts();
 
-  const customerFieldOptions = ["name", "phone", "email", "address", "company", "order_id", "account_number"];
-
   return (
     <ProtectedRoute>
       <DashboardLayout>
@@ -699,7 +657,7 @@ export default function AIPrompt() {
                     )}
                   </div>
 
-                  {/* Company Information Section */}
+                  {/* Company Information Section - Essential Only */}
                   <div className="space-y-4 p-4 bg-muted/30 rounded-lg border">
                     <div className="flex items-center gap-2">
                       <Building2 className="h-4 w-4" />
@@ -717,53 +675,16 @@ export default function AIPrompt() {
                           placeholder="e.g., NSOL BPO"
                         />
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="companyAddress">Company Address</Label>
-                        <Input
-                          id="companyAddress"
-                          value={formData.companyAddress || ""}
-                          onChange={(e) => setFormData(prev => ({ ...prev, companyAddress: e.target.value }))}
-                          placeholder="e.g., Pakistan"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="companyWebsite">Website</Label>
-                        <Input
-                          id="companyWebsite"
-                          value={formData.companyWebsite || ""}
-                          onChange={(e) => setFormData(prev => ({ ...prev, companyWebsite: e.target.value }))}
-                          placeholder="https://example.com"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="companyEmail">Email</Label>
-                        <Input
-                          id="companyEmail"
-                          type="email"
-                          value={formData.companyEmail || ""}
-                          onChange={(e) => setFormData(prev => ({ ...prev, companyEmail: e.target.value }))}
-                          placeholder="contact@example.com"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="companyPhone">Phone</Label>
-                        <Input
-                          id="companyPhone"
-                          value={formData.companyPhone || ""}
-                          onChange={(e) => setFormData(prev => ({ ...prev, companyPhone: e.target.value }))}
-                          placeholder="+1 234 567 8900"
-                        />
-                      </div>
                     </div>
                   </div>
 
-                  {/* Business & Agent Setup */}
+                  {/* Business & Agent Setup - Essential Fields Only */}
                   <div className="space-y-4 p-4 bg-muted/30 rounded-lg border">
                     <Label className="text-base font-semibold">Business & Agent Setup</Label>
                     <div className="grid md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label htmlFor="businessIndustry">
-                          Business Industry <span className="text-destructive">*</span>
+                          Business Industry
                         </Label>
                         <Input
                           id="businessIndustry"
@@ -796,7 +717,9 @@ export default function AIPrompt() {
                         </Select>
                       </div>
                       <div className="space-y-2 md:col-span-2">
-                        <Label htmlFor="businessDescription">Business Description</Label>
+                        <Label htmlFor="businessDescription">
+                          Business Description <span className="text-xs text-muted-foreground">(Required if Industry not provided)</span>
+                        </Label>
                         <Textarea
                           id="businessDescription"
                           value={formData.businessDescription || ""}
@@ -902,173 +825,6 @@ export default function AIPrompt() {
                               onClick={() => removeService(index)}
                             >
                               <X className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Additional Information */}
-                  <div className="space-y-4 p-4 bg-muted/30 rounded-lg border">
-                    <Label className="text-base font-semibold">Additional Information</Label>
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="pricingInfo">Pricing Info</Label>
-                        <Textarea
-                          id="pricingInfo"
-                          value={formData.pricingInfo || ""}
-                          onChange={(e) => setFormData(prev => ({ ...prev, pricingInfo: e.target.value }))}
-                          placeholder="Pricing details if available"
-                          className="min-h-[80px]"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="businessHours">Business Hours</Label>
-                        <Input
-                          id="businessHours"
-                          value={formData.businessHours || ""}
-                          onChange={(e) => setFormData(prev => ({ ...prev, businessHours: e.target.value }))}
-                          placeholder="e.g., Mon-Fri 9AM-5PM"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="bookingMethod">Booking Method</Label>
-                        <Input
-                          id="bookingMethod"
-                          value={formData.bookingMethod || ""}
-                          onChange={(e) => setFormData(prev => ({ ...prev, bookingMethod: e.target.value }))}
-                          placeholder="e.g., Calendar link or manual process"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="appointmentRules">Appointment Rules</Label>
-                        <Textarea
-                          id="appointmentRules"
-                          value={formData.appointmentRules || ""}
-                          onChange={(e) => setFormData(prev => ({ ...prev, appointmentRules: e.target.value }))}
-                          placeholder="How booking works"
-                          className="min-h-[80px]"
-                        />
-                      </div>
-                      <div className="space-y-2 md:col-span-2">
-                        <Label htmlFor="escalationProcess">Escalation Process</Label>
-                        <Textarea
-                          id="escalationProcess"
-                          value={formData.escalationProcess || ""}
-                          onChange={(e) => setFormData(prev => ({ ...prev, escalationProcess: e.target.value }))}
-                          placeholder="What to do if issue cannot be resolved"
-                          className="min-h-[80px]"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Required Customer Fields */}
-                  <div className="space-y-4 p-4 bg-muted/30 rounded-lg border">
-                    <Label className="text-base font-semibold">Required Customer Fields</Label>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      {customerFieldOptions.map((field) => (
-                        <div key={field} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={field}
-                            checked={formData.requiredCustomerFields?.includes(field)}
-                            onCheckedChange={() => toggleCustomerField(field)}
-                          />
-                          <Label htmlFor={field} className="text-sm font-normal cursor-pointer capitalize">
-                            {field.replace("_", " ")}
-                          </Label>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* FAQs */}
-                  <div className="space-y-4 p-4 bg-muted/30 rounded-lg border">
-                    <Label className="text-base font-semibold">FAQs</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        value={newFaq}
-                        onChange={(e) => setNewFaq(e.target.value)}
-                        onKeyPress={(e) => e.key === "Enter" && addFaq()}
-                        placeholder="Add a FAQ"
-                      />
-                      <Button type="button" onClick={addFaq}>Add</Button>
-                    </div>
-                    {formData.faqs && formData.faqs.length > 0 && (
-                      <div className="space-y-2">
-                        {formData.faqs.map((faq, index) => (
-                          <div key={index} className="flex items-center gap-2 bg-slate-100 p-2 rounded">
-                            <span className="text-sm flex-1">{faq}</span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removeFaq(index)}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Objections */}
-                  <div className="space-y-4 p-4 bg-muted/30 rounded-lg border">
-                    <Label className="text-base font-semibold">Objections & Responses</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        value={newObjection}
-                        onChange={(e) => setNewObjection(e.target.value)}
-                        onKeyPress={(e) => e.key === "Enter" && addObjection()}
-                        placeholder="Add objection + recommended response"
-                      />
-                      <Button type="button" onClick={addObjection}>Add</Button>
-                    </div>
-                    {formData.objections && formData.objections.length > 0 && (
-                      <div className="space-y-2">
-                        {formData.objections.map((objection, index) => (
-                          <div key={index} className="flex items-center gap-2 bg-slate-100 p-2 rounded">
-                            <span className="text-sm flex-1">{objection}</span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removeObjection(index)}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Policies */}
-                  <div className="space-y-4 p-4 bg-muted/30 rounded-lg border">
-                    <Label className="text-base font-semibold">Policies</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        value={newPolicy}
-                        onChange={(e) => setNewPolicy(e.target.value)}
-                        onKeyPress={(e) => e.key === "Enter" && addPolicy()}
-                        placeholder="Add policy (refund, cancellation, etc.)"
-                      />
-                      <Button type="button" onClick={addPolicy}>Add</Button>
-                    </div>
-                    {formData.policies && formData.policies.length > 0 && (
-                      <div className="space-y-2">
-                        {formData.policies.map((policy, index) => (
-                          <div key={index} className="flex items-center gap-2 bg-slate-100 p-2 rounded">
-                            <span className="text-sm flex-1">{policy}</span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removePolicy(index)}
-                            >
-                              <X className="h-4 w-4" />
                             </Button>
                           </div>
                         ))}

@@ -3,12 +3,24 @@ import nodemailer from 'nodemailer';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import multer from 'multer';
+import OpenAI from 'openai';
+import Retell from 'retell-sdk';
 import { extractTextFromFile } from './services/documentExtractor.js';
 import { analyzeCallTranscript } from './services/callAnalysis.js';
+import { extractDocumentProfile, generatePromptFromProfile, formatRawPrompt } from './services/aiPromptService.js';
+import { sendChatbotMessage } from './services/chatbotService.js';
+import { generateEmailContent, generateEmailTemplate } from './services/emailService.js';
 import { createClient } from '@supabase/supabase-js';
+import authRoutes from './routes/auth.js';
+import webhookRoutes from './routes/webhooks.js';
 
 // Load environment variables from .env file
 dotenv.config();
+
+// Initialize OpenAI client for sidebar endpoints
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 // Initialize Supabase client (only if env vars are available)
 let supabase = null;
@@ -21,12 +33,52 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
   console.warn('Warning: Supabase credentials not configured. Call analysis features will not work.');
 }
 
+// Initialize Retell client (only if API key is available)
+let retellClient = null;
+if (process.env.RETELL_API_KEY) {
+  retellClient = new Retell({
+    apiKey: process.env.RETELL_API_KEY,
+  });
+} else {
+  console.warn('Warning: Retell API key not configured. Test call features will not work.');
+}
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors());
+// CORS configuration - allow multiple origins for development
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'http://localhost:5173',
+  'http://localhost:8080',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:8080',
+  'http://127.0.0.1:3000',
+].filter(Boolean); // Remove undefined values
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 app.use(express.json());
+
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/webhooks', webhookRoutes);
 
 // Configure multer for file uploads
 const upload = multer({ 
@@ -563,6 +615,350 @@ app.post('/api/extract-document', upload.single('file'), async (req, res) => {
 });
 
 /**
+ * POST /api/ai-prompt/extract-document-profile
+ * Extract structured business profile from document text using AI
+ * 
+ * Request body:
+ * {
+ *   "extractedText": "text content from document"
+ * }
+ */
+app.post('/api/ai-prompt/extract-document-profile', async (req, res) => {
+  try {
+    const { extractedText } = req.body;
+
+    if (!extractedText || extractedText.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'extractedText is required'
+      });
+    }
+
+    const result = await extractDocumentProfile(extractedText);
+
+    res.json({
+      success: true,
+      extractedProfile: result.extractedProfile,
+      missingFields: result.missingFields,
+    });
+  } catch (error) {
+    console.error('Error extracting document profile:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to extract document profile'
+    });
+  }
+});
+
+/**
+ * POST /api/ai-prompt/generate-from-profile
+ * Generate AI prompt from business profile
+ * 
+ * Request body:
+ * {
+ *   "profile": { ... business profile object ... }
+ * }
+ */
+app.post('/api/ai-prompt/generate-from-profile', async (req, res) => {
+  try {
+    const { profile } = req.body;
+
+    if (!profile || typeof profile !== 'object') {
+      return res.status(400).json({
+        success: false,
+        error: 'profile is required and must be an object'
+      });
+    }
+
+    const result = await generatePromptFromProfile(profile);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error('Error generating prompt from profile:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to generate prompt from profile'
+    });
+  }
+});
+
+/**
+ * POST /api/ai-prompt/format-raw-prompt
+ * Format raw unstructured prompt into structured format
+ * 
+ * Request body:
+ * {
+ *   "rawPrompt": "raw prompt text"
+ * }
+ */
+app.post('/api/ai-prompt/format-raw-prompt', async (req, res) => {
+  try {
+    const { rawPrompt } = req.body;
+
+    if (!rawPrompt || rawPrompt.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'rawPrompt is required'
+      });
+    }
+
+    const formattedPrompt = await formatRawPrompt(rawPrompt);
+
+    res.json({
+      success: true,
+      formattedPrompt,
+    });
+  } catch (error) {
+    console.error('Error formatting prompt:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to format prompt'
+    });
+  }
+});
+
+/**
+ * POST /api/chatbot/send-message
+ * Send a message to the chatbot
+ * 
+ * Request body:
+ * {
+ *   "message": "user message",
+ *   "conversationHistory": [{"role": "user", "content": "..."}],
+ *   "sessionId": "optional-session-id",
+ *   "userId": "optional-user-id"
+ * }
+ */
+app.post('/api/chatbot/send-message', async (req, res) => {
+  try {
+    const { message, conversationHistory = [] } = req.body;
+
+    if (!message || message.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'message is required'
+      });
+    }
+
+    const botResponse = await sendChatbotMessage(message, conversationHistory);
+
+    res.json({
+      success: true,
+      response: botResponse,
+      message: botResponse, // For compatibility
+    });
+  } catch (error) {
+    console.error('Error sending chatbot message:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to send chatbot message'
+    });
+  }
+});
+
+/**
+ * POST /api/ai-email/generate
+ * Generate email content using AI
+ * 
+ * Request body:
+ * {
+ *   "leadInfo": {...},
+ *   "emailType": "follow-up" | "thank-you" | "appointment" | "custom",
+ *   "tone": "professional" | "friendly" | "casual" | "formal",
+ *   "purpose": "optional purpose",
+ *   "context": "optional context"
+ * }
+ */
+app.post('/api/ai-email/generate', async (req, res) => {
+  try {
+    const { leadInfo, emailType, tone, purpose, context } = req.body;
+
+    const result = await generateEmailContent({
+      leadInfo,
+      emailType,
+      tone,
+      purpose,
+      context,
+    });
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error('Error generating email:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to generate email'
+    });
+  }
+});
+
+/**
+ * POST /api/ai-email/generate-template
+ * Generate email template using AI
+ * 
+ * Request body:
+ * {
+ *   "name": "template name",
+ *   "description": "optional description",
+ *   "emailType": "follow-up" | "thank-you" | "appointment" | "custom",
+ *   "tone": "professional" | "friendly" | "casual" | "formal",
+ *   "purpose": "optional purpose"
+ * }
+ */
+app.post('/api/ai-email/generate-template', async (req, res) => {
+  try {
+    const { name, description, emailType, tone, purpose } = req.body;
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'name is required'
+      });
+    }
+
+    const result = await generateEmailTemplate({
+      name,
+      description,
+      emailType,
+      tone,
+      purpose,
+    });
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error('Error generating email template:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to generate email template'
+    });
+  }
+});
+
+/**
+ * POST /api/ai-prompt/sidebar-generate
+ * Generate prompt from business type and description (for sidebar)
+ * 
+ * Request body:
+ * {
+ *   "businessType": "business type",
+ *   "businessDescription": "business description"
+ * }
+ */
+app.post('/api/ai-prompt/sidebar-generate', async (req, res) => {
+  try {
+    const { businessType, businessDescription } = req.body;
+
+    if (!businessType || !businessDescription) {
+      return res.status(400).json({
+        success: false,
+        error: 'businessType and businessDescription are required'
+      });
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert at creating AI voice agent prompts. Generate professional, effective prompts for voice agents based on business information.',
+        },
+        {
+          role: 'user',
+          content: `Generate a comprehensive AI voice agent prompt for a ${businessType} business. Business description: ${businessDescription}. The prompt should be professional, clear, and effective for handling customer inquiries.`,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 1000,
+    });
+
+    const generatedText = completion.choices[0]?.message?.content || '';
+
+    res.json({
+      success: true,
+      generatedPrompt: generatedText,
+    });
+  } catch (error) {
+    console.error('Error generating sidebar prompt:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to generate prompt'
+    });
+  }
+});
+
+/**
+ * POST /api/ai-prompt/sidebar-format
+ * Format prompt using AI (for sidebar)
+ * 
+ * Request body:
+ * {
+ *   "promptToFormat": "raw prompt text"
+ * }
+ */
+app.post('/api/ai-prompt/sidebar-format', async (req, res) => {
+  try {
+    const { promptToFormat } = req.body;
+
+    if (!promptToFormat || promptToFormat.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'promptToFormat is required'
+      });
+    }
+
+    const formatInstructions = `Format the following prompt according to these guidelines:
+1. Use clear, concise language
+2. Structure with bullet points or numbered lists where appropriate
+3. Include specific instructions for tone and behavior
+4. Add context about the business or service
+5. Include examples of good responses
+6. Ensure professional and friendly tone
+
+Original Prompt:
+${promptToFormat}
+
+Formatted Prompt:`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert at formatting and structuring AI prompts. Format prompts to be clear, professional, and effective.',
+        },
+        {
+          role: 'user',
+          content: formatInstructions,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 1500,
+    });
+
+    const formattedText = completion.choices[0]?.message?.content || '';
+
+    res.json({
+      success: true,
+      formattedPrompt: formattedText,
+    });
+  } catch (error) {
+    console.error('Error formatting sidebar prompt:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to format prompt'
+    });
+  }
+});
+
+/**
  * POST /api/calls/analyze
  * Analyze a completed call transcript and update database
  * 
@@ -812,6 +1208,62 @@ async function upsertLeadFromAnalysis(call, analysis) {
     // Don't throw - we don't want to fail the analysis if lead upsert fails
   }
 }
+
+/**
+ * POST /api/test-call/create-token
+ * Create a WebRTC call token for testing an agent
+ * 
+ * Request body:
+ * {
+ *   "agent_id": "retell_agent_id"
+ * }
+ */
+app.post('/api/test-call/create-token', async (req, res) => {
+  try {
+    const { agent_id } = req.body;
+
+    if (!agent_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'agent_id is required'
+      });
+    }
+
+    if (!retellClient) {
+      return res.status(500).json({
+        success: false,
+        error: 'Retell API key not configured'
+      });
+    }
+
+    // Create a WebRTC call using Retell SDK
+    const webCallResponse = await retellClient.call.createWebCall({
+      agent_id: agent_id,
+      retell_llm_dynamic_variables: {},
+    });
+
+    console.log('Web call created successfully:', {
+      call_id: webCallResponse.call_id,
+      agent_id: webCallResponse.agent_id,
+    });
+
+    res.json({
+      success: true,
+      call_id: webCallResponse.call_id,
+      access_token: webCallResponse.access_token,
+      call_type: webCallResponse.call_type,
+      agent_id: webCallResponse.agent_id,
+      ...webCallResponse,
+    });
+
+  } catch (error) {
+    console.error('Error creating test call token:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to create test call token'
+    });
+  }
+});
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

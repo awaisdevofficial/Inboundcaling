@@ -21,6 +21,7 @@ import {
   PhoneIncoming,
   Download,
 } from "lucide-react";
+import { TranscriptDisplay } from "@/components/transcript/TranscriptDisplay";
 import {
   Card,
   CardContent,
@@ -824,17 +825,11 @@ export default function Calls() {
                     {/* Content Tab */}
                     <TabsContent value="content" className="space-y-4 mt-0">
                       {selectedCall.transcript && (
-                        <div>
-                          <Label className="text-sm font-medium flex items-center gap-2 mb-2">
-                            <FileText className="h-4 w-4" />
-                            Transcript
-                          </Label>
-                          <ScrollArea className="h-48 mt-2 p-4 bg-secondary/30 rounded-lg border">
-                            <p className="text-sm whitespace-pre-wrap leading-relaxed">
-                              {selectedCall.transcript}
-                            </p>
-                          </ScrollArea>
-                        </div>
+                        <TranscriptDisplay
+                          transcript={selectedCall.transcript}
+                          metadata={selectedCall.metadata || selectedCall.webhook_response}
+                          height="h-96"
+                        />
                       )}
 
                       {selectedCall.recording_url && (
