@@ -30,28 +30,28 @@ export function TestAgentModal({
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<string>("");
+  const [transcriptSegments, setTranscriptSegments] = useState<
+    Array<{ text: string; role: "agent" | "user" }>
+  >([]);
   const [callId, setCallId] = useState<string | null>(null);
+  const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
   const retellClientRef = useRef<RetellWebClient | null>(null);
   const { user } = useAuth();
   const transcriptEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Cleanup on unmount
     return () => {
       cleanup();
     };
   }, []);
 
   useEffect(() => {
-    // Cleanup when modal closes
     if (!open) {
       cleanup();
     }
   }, [open]);
 
   const cleanup = async () => {
-    // Save test call data before cleanup
-    // callId should be the database UUID (set after successful insert)
     if (callId && user && bot && !callId.startsWith("call_")) {
       try {
         await supabase
@@ -81,6 +81,8 @@ export function TestAgentModal({
     setIsMuted(false);
     setError(null);
     setTranscript("");
+    setTranscriptSegments([]);
+    setIsAgentSpeaking(false);
     setCallId(null);
   };
 
@@ -89,7 +91,23 @@ export function TestAgentModal({
     if (transcriptEndRef.current) {
       transcriptEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [transcript]);
+  }, [transcriptSegments]);
+
+  /**
+   * Parse the Retell `update` event transcript array.
+   * Retell sends: { transcript: [{ role: "agent"|"user", content: string }, ...] }
+   * We rebuild the full segments list from this authoritative array each time.
+   */
+  const parseRetellTranscript = (
+    transcriptArray: Array<{ role: string; content: string }>
+  ): Array<{ text: string; role: "agent" | "user" }> => {
+    return transcriptArray
+      .filter((item) => item && item.content && item.content.trim())
+      .map((item) => ({
+        text: item.content.trim(),
+        role: item.role === "agent" ? "agent" : "user",
+      }));
+  };
 
   const handleStartCall = async () => {
     if (!bot?.retell_agent_id) {
@@ -101,17 +119,12 @@ export function TestAgentModal({
     setError(null);
 
     try {
-      // Get call token from backend
       const response = await fetch(
         `${import.meta.env.VITE_BACKEND_URL || "http://localhost:3001"}/api/test-call/create-token`,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            agent_id: bot.retell_agent_id,
-          }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agent_id: bot.retell_agent_id }),
         }
       );
 
@@ -127,15 +140,15 @@ export function TestAgentModal({
       const data = await response.json();
 
       if (!data.access_token || !data.call_id) {
-        throw new Error("Invalid response from server: missing access_token or call_id");
+        throw new Error(
+          "Invalid response from server: missing access_token or call_id"
+        );
       }
 
       const accessToken = data.access_token;
       const retellCallId = data.call_id;
 
       // Create test call record in database
-      // Note: We don't set id - let Supabase generate a UUID
-      // Store Retell call_id in metadata for later lookup
       let dbCallId: string | null = null;
       if (user && bot) {
         try {
@@ -151,7 +164,7 @@ export function TestAgentModal({
               is_test_call: true,
               metadata: {
                 test_call: true,
-                retell_call_id: retellCallId, // Store Retell call_id in metadata
+                retell_call_id: retellCallId,
                 agent_id: bot.retell_agent_id,
               },
             })
@@ -161,7 +174,6 @@ export function TestAgentModal({
           if (callError) {
             console.error("Error creating test call record:", callError);
           } else if (callData) {
-            // Store the database call ID for later updates
             dbCallId = callData.id;
             setCallId(dbCallId);
           }
@@ -170,7 +182,6 @@ export function TestAgentModal({
         }
       }
 
-      // If database insert failed, still store Retell call_id as fallback
       if (!dbCallId) {
         setCallId(retellCallId);
       }
@@ -179,176 +190,73 @@ export function TestAgentModal({
       const retellClient = new RetellWebClient();
       retellClientRef.current = retellClient;
 
-      // Set up event handlers
-      retellClient.on('call_started', () => {
-        console.log('Call started');
+      retellClient.on("call_started", () => {
+        console.log("Call started");
         setIsConnecting(false);
       });
 
-      retellClient.on('call_ready', () => {
-        console.log('Call ready - agent audio connected');
+      retellClient.on("call_ready", () => {
+        console.log("Call ready");
         setIsConnected(true);
         setIsConnecting(false);
         setError(null);
       });
 
-      retellClient.on('call_ended', () => {
-        console.log('Call ended');
+      retellClient.on("call_ended", () => {
+        console.log("Call ended");
         setIsConnected(false);
         setIsConnecting(false);
         cleanup();
       });
 
-      retellClient.on('error', (error: any) => {
-        console.error('Retell client error:', error);
-        setError(typeof error === 'string' ? error : (error?.message || 'Connection error occurred'));
+      retellClient.on("error", (error: any) => {
+        console.error("Retell client error:", error);
+        setError(
+          typeof error === "string"
+            ? error
+            : error?.message || "Connection error occurred"
+        );
         setIsConnecting(false);
         setIsConnected(false);
       });
 
-      retellClient.on('agent_start_talking', () => {
-        console.log('Agent started talking');
+      retellClient.on("agent_start_talking", () => {
+        setIsAgentSpeaking(true);
       });
 
-      retellClient.on('agent_stop_talking', () => {
-        console.log('Agent stopped talking');
+      retellClient.on("agent_stop_talking", () => {
+        setIsAgentSpeaking(false);
       });
 
-      // Helper function to extract text from transcript objects
-      const extractTranscriptText = (data: any): string | null => {
-        if (!data) return null;
-        
-        // If it's already a string, return it
-        if (typeof data === 'string') {
-          return data.trim() || null;
-        }
-        
-        // If it's an object, try to find text properties
-        if (typeof data === 'object') {
-          // Check common transcript properties
-          if (data.text && typeof data.text === 'string') return data.text.trim();
-          if (data.content && typeof data.content === 'string') return data.content.trim();
-          if (data.transcript && typeof data.transcript === 'string') return data.transcript.trim();
-          if (data.message && typeof data.message === 'string') return data.message.trim();
-          if (data.sentence && typeof data.sentence === 'string') return data.sentence.trim();
-          
-          // If it's an array, process each item
-          if (Array.isArray(data)) {
-            const texts = data
-              .map((item) => extractTranscriptText(item))
-              .filter((text): text is string => text !== null);
-            return texts.length > 0 ? texts.join(' ') : null;
-          }
-          
-          // Try to find any string property
-          for (const key in data) {
-            if (typeof data[key] === 'string' && data[key].trim()) {
-              return data[key].trim();
-            }
+      /**
+       * The Retell `update` event contains the FULL transcript array so far.
+       * Shape: { transcript: [{ role: "agent"|"user", content: string }] }
+       * We simply replace our segments with the latest full array each time.
+       */
+      retellClient.on("update", (event: any) => {
+        console.log("Update event:", JSON.stringify(event, null, 2));
+
+        // Retell transcript is an array of {role, content} objects
+        if (Array.isArray(event?.transcript) && event.transcript.length > 0) {
+          const segments = parseRetellTranscript(event.transcript);
+          if (segments.length > 0) {
+            setTranscriptSegments(segments);
+
+            // Build plain transcript string for DB storage
+            const plainText = segments
+              .map((s) => `${s.role === "agent" ? "Agent" : "Human"}: ${s.text}`)
+              .join("\n");
+            setTranscript(plainText);
           }
         }
-        
-        return null;
-      };
-
-      // Handle transcript updates
-      retellClient.on('update', (event: any) => {
-        console.log('Update event:', event);
-        
-        // Try to extract transcript from various locations
-        const transcriptText = extractTranscriptText(event.transcript) ||
-                              extractTranscriptText(event.transcript_segments) ||
-                              extractTranscriptText(event.text) ||
-                              extractTranscriptText(event.content) ||
-                              extractTranscriptText(event);
-        
-        if (transcriptText) {
-          setTranscript((prev) => {
-            if (!prev) {
-              return transcriptText.trim();
-            }
-            
-            // Split into lines and get the last line
-            const lines = prev.split('\n').filter(line => line.trim());
-            const lastLine = lines[lines.length - 1] || '';
-            const trimmedText = transcriptText.trim();
-            
-            // Check if this is an incremental update (new text extends the last line)
-            // This handles cases like: "Hello!" -> "Hello! I'm" -> "Hello! I'm here"
-            if (lastLine && trimmedText.startsWith(lastLine.trim())) {
-              // Replace the last line with the updated/extended text
-              lines[lines.length - 1] = trimmedText;
-              return lines.join('\n');
-            }
-            
-            // Check if the new text is exactly the same as the last line (duplicate)
-            if (lastLine.trim() === trimmedText) {
-              return prev;
-            }
-            
-            // Check if the new text is already somewhere in the transcript (exact match)
-            if (prev.includes(trimmedText)) {
-              return prev;
-            }
-            
-            // It's a completely new segment - add it as a new line
-            return `${prev}\n${trimmedText}`;
-          });
-        }
       });
 
-      retellClient.on('metadata', (event: any) => {
-        console.log('Metadata event:', event);
-        
-        // Try to extract transcript from various locations
-        const transcriptText = extractTranscriptText(event.transcript) ||
-                              extractTranscriptText(event.transcript_segments) ||
-                              extractTranscriptText(event.text) ||
-                              extractTranscriptText(event.content) ||
-                              extractTranscriptText(event);
-        
-        if (transcriptText) {
-          setTranscript((prev) => {
-            if (!prev) {
-              return transcriptText.trim();
-            }
-            
-            // Split into lines and get the last line
-            const lines = prev.split('\n').filter(line => line.trim());
-            const lastLine = lines[lines.length - 1] || '';
-            const trimmedText = transcriptText.trim();
-            
-            // Check if this is an incremental update (new text extends the last line)
-            // This handles cases like: "Hello!" -> "Hello! I'm" -> "Hello! I'm here"
-            if (lastLine && trimmedText.startsWith(lastLine.trim())) {
-              // Replace the last line with the updated/extended text
-              lines[lines.length - 1] = trimmedText;
-              return lines.join('\n');
-            }
-            
-            // Check if the new text is exactly the same as the last line (duplicate)
-            if (lastLine.trim() === trimmedText) {
-              return prev;
-            }
-            
-            // Check if the new text is already somewhere in the transcript (exact match)
-            if (prev.includes(trimmedText)) {
-              return prev;
-            }
-            
-            // It's a completely new segment - add it as a new line
-            return `${prev}\n${trimmedText}`;
-          });
-        }
-      });
-
-      // Start the call with the access token
+      // Start the call
       await retellClient.startCall({
         accessToken: accessToken,
         sampleRate: 24000,
       });
 
-      // Start audio playback
       await retellClient.startAudioPlayback();
     } catch (err: any) {
       setError(err.message || "Failed to start call");
@@ -415,11 +323,21 @@ export function TestAgentModal({
 
               {isConnected && (
                 <>
-                  <div className="h-20 w-20 rounded-full bg-green-500 flex items-center justify-center animate-pulse">
+                  <div
+                    className={`h-20 w-20 rounded-full flex items-center justify-center transition-all ${
+                      isAgentSpeaking
+                        ? "bg-blue-500 animate-pulse"
+                        : "bg-green-500 animate-pulse"
+                    }`}
+                  >
                     <Phone className="h-10 w-10 text-white" />
                   </div>
-                  <p className="text-sm text-green-600 font-medium">
-                    Connected - Speak now
+                  <p
+                    className={`text-sm font-medium ${
+                      isAgentSpeaking ? "text-blue-600" : "text-green-600"
+                    }`}
+                  >
+                    {isAgentSpeaking ? "Agent is speaking..." : "Connected - Speak now"}
                   </p>
                 </>
               )}
@@ -441,13 +359,25 @@ export function TestAgentModal({
                 <h3 className="text-sm font-medium">Live Transcript</h3>
               </div>
               <ScrollArea className="h-48 w-full rounded-lg border bg-muted/30 p-4">
-                {transcript ? (
+                {transcriptSegments.length > 0 ? (
                   <div className="space-y-2 text-sm">
-                    {transcript.split("\n").map((line, idx) => (
-                      <p key={idx} className="text-muted-foreground">
-                        {line}
-                      </p>
-                    ))}
+                    {transcriptSegments.map((segment, idx) => {
+                      const isAgent = segment.role === "agent";
+                      return (
+                        <div key={idx} className="flex items-start gap-2">
+                          <span
+                            className={`font-semibold min-w-[60px] ${
+                              isAgent ? "text-blue-600" : "text-slate-600"
+                            }`}
+                          >
+                            {isAgent ? "Agent:" : "Human:"}
+                          </span>
+                          <span className="text-muted-foreground flex-1">
+                            {segment.text}
+                          </span>
+                        </div>
+                      );
+                    })}
                     <div ref={transcriptEndRef} />
                   </div>
                 ) : (
@@ -492,11 +422,7 @@ export function TestAgentModal({
                     <Mic className="h-5 w-5" />
                   )}
                 </Button>
-                <Button
-                  onClick={handleEndCall}
-                  variant="destructive"
-                  size="lg"
-                >
+                <Button onClick={handleEndCall} variant="destructive" size="lg">
                   <PhoneOff className="h-5 w-5 mr-2" />
                   End Call
                 </Button>
@@ -511,14 +437,6 @@ export function TestAgentModal({
                 ? "You're now connected. Speak naturally to test your agent."
                 : "Click 'Start Test Call' to begin a voice conversation with your agent."}
             </p>
-            {error && error.includes("WebSocket") && (
-              <div className="mt-3 p-3 rounded-lg bg-yellow-50 border border-yellow-200">
-                <p className="text-xs text-yellow-800">
-                  <strong>Note:</strong> WebRTC connection requires Retell's official JavaScript SDK or correct WebSocket endpoint. 
-                  Please check Retell's documentation for web call integration or contact support for the correct connection method.
-                </p>
-              </div>
-            )}
           </div>
         </div>
       </DialogContent>

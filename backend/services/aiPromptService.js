@@ -3,8 +3,14 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Get and validate API key
+const apiKey = process.env.OPENAI_API_KEY?.trim();
+if (!apiKey) {
+  console.error('OPENAI_API_KEY is not set in environment variables');
+}
+
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: apiKey,
 });
 
 // Import the system prompts (we'll need to define them here or import from a shared location)
@@ -58,23 +64,24 @@ You will receive a JSON object containing business and agent configuration.
 Your job is to generate a complete AI Voice Agent Prompt that will be used inside an inbound calling system.
 
 CRITICAL RULES:
+- Always generate the final prompt. Never block generation.
 - Never invent business services, pricing, policies, or systems.
-- Use ONLY the information provided in input JSON.
-- If any important information is missing, do not generate the final prompt.
-- Instead, return clarification questions.
+- Use the information provided in input JSON when available.
+- If information is missing, use generic/default values that make sense for the context.
+- If important fields are missing, include them in clarificationQuestions as optional suggestions.
+- Always set status to "ready" and generate the prompt.
 
 OUTPUT MUST ALWAYS BE JSON ONLY.
 
 Output format:
 {
-  "status": "ready" | "needs_clarification",
+  "status": "ready",
   "clarificationQuestions": [],
   "finalPrompt": ""
 }
 
-If required fields are missing, status must be "needs_clarification".
-
-Required fields:
+IMPORTANT: Always set status to "ready" and generate finalPrompt. 
+If any of these fields are missing, include them in clarificationQuestions with a note that answering them will provide better results:
 - companyName
 - businessIndustry OR businessDescription
 - agentPurpose
@@ -83,7 +90,7 @@ Required fields:
 - callGoal
 - services (minimum 2)
 
-If status = "ready", generate finalPrompt using this structure:
+Generate finalPrompt using this structure:
 
 FINAL PROMPT STRUCTURE:
 
@@ -263,7 +270,8 @@ Constraints:
  * Extracts structured business profile from document text
  */
 export async function extractDocumentProfile(extractedText) {
-  if (!process.env.OPENAI_API_KEY) {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
     throw new Error('OPENAI_API_KEY is not configured');
   }
 
@@ -273,7 +281,7 @@ export async function extractDocumentProfile(extractedText) {
 
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -314,7 +322,8 @@ export async function extractDocumentProfile(extractedText) {
  * Generates final prompt from structured profile, or returns clarification questions
  */
 export async function generatePromptFromProfile(profile) {
-  if (!process.env.OPENAI_API_KEY) {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
     throw new Error('OPENAI_API_KEY is not configured');
   }
 
@@ -324,7 +333,7 @@ export async function generatePromptFromProfile(profile) {
 
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -332,7 +341,7 @@ export async function generatePromptFromProfile(profile) {
         },
         {
           role: 'user',
-          content: `Generate a prompt from this business profile:\n\n${JSON.stringify(profile, null, 2)}`,
+          content: `Generate a prompt from this business profile. Always generate the prompt. If any information is missing, include optional clarification questions noting that answering them will provide better results:\n\n${JSON.stringify(profile, null, 2)}`,
         },
       ],
       temperature: 0.2,
@@ -361,7 +370,8 @@ export async function generatePromptFromProfile(profile) {
  * Formats raw unstructured prompt into structured format
  */
 export async function formatRawPrompt(rawPrompt) {
-  if (!process.env.OPENAI_API_KEY) {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
     throw new Error('OPENAI_API_KEY is not configured');
   }
 

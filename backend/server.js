@@ -18,8 +18,12 @@ import webhookRoutes from './routes/webhooks.js';
 dotenv.config();
 
 // Initialize OpenAI client for sidebar endpoints
+const openaiApiKey = process.env.OPENAI_API_KEY?.trim();
+if (!openaiApiKey) {
+  console.warn('Warning: OPENAI_API_KEY is not configured. OpenAI features will not work.');
+}
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: openaiApiKey,
 });
 
 // Initialize Supabase client (only if env vars are available)

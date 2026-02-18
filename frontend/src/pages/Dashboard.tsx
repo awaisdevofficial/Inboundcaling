@@ -62,12 +62,13 @@ import {
   Legend,
   Tooltip
 } from "recharts";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { formatDuration } from "@/lib/credits";
 import type { Call, PageLead } from "@/types/database";
 import { format, subDays, isSameDay, parseISO, startOfDay } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { CreditsUsageModal } from "@/components/CreditsUsageModal";
 
 export default function Dashboard() {
   const { stats, calls, loading: callsLoading } = useCalls();
@@ -76,11 +77,18 @@ export default function Dashboard() {
   const { profile, loading: profileLoading } = useProfile();
   const { getTotalMinutesUsed } = useCreditUsage();
   const navigate = useNavigate();
+  const [creditsModalOpen, setCreditsModalOpen] = useState(false);
   
-  // Use profile fields (maintained by database trigger) as primary source
-  const totalMinutesUsed = profile?.total_minutes_used 
-    ? parseFloat(String(profile.total_minutes_used)) 
-    : 0;
+  // Use profile's total_minutes_used (maintained by database triggers) as primary source
+  // This is more accurate than calculating from logs since it includes all historical data
+  const totalMinutesUsed = useMemo(() => {
+    if (profile?.total_minutes_used !== null && profile?.total_minutes_used !== undefined) {
+      return parseFloat(String(profile.total_minutes_used));
+    }
+    // Fallback to calculating from usage logs if profile value is not available
+    return getTotalMinutesUsed();
+  }, [profile?.total_minutes_used, getTotalMinutesUsed]);
+  
   const remainingCredits = profile?.Remaning_credits 
     ? parseFloat(String(profile.Remaning_credits)) 
     : 0;
@@ -317,7 +325,10 @@ export default function Dashboard() {
               </Card>
 
               {/* Credits Usage Card */}
-              <Card className="border-slate-200 shadow-sm hover:shadow-md transition-all duration-200 group">
+              <Card 
+                className="border-slate-200 shadow-sm hover:shadow-md transition-all duration-200 group cursor-pointer"
+                onClick={() => setCreditsModalOpen(true)}
+              >
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between">
                     <div>
@@ -328,9 +339,13 @@ export default function Dashboard() {
                       <Zap className="h-5 w-5 text-amber-600" />
                     </div>
                   </div>
-                  <div className="mt-4 flex items-center text-xs">
-                    <span className="text-slate-500">
-                      <span className="font-medium text-slate-900">{totalMinutesUsed.toFixed(0)}</span> minutes used total
+                  <div className="mt-4 flex items-center justify-between">
+                    <span className="text-slate-500 text-xs">
+                      <Clock className="h-3 w-3 inline mr-1" />
+                      <span className="font-medium text-slate-900">{totalMinutesUsed.toFixed(0)}</span> minutes used
+                    </span>
+                    <span className="text-xs text-amber-600 font-medium group-hover:text-amber-700">
+                      View details →
                     </span>
                   </div>
                 </CardContent>
@@ -627,6 +642,10 @@ export default function Dashboard() {
             </div>
           </div>
         </FeatureGate>
+        <CreditsUsageModal
+          open={creditsModalOpen}
+          onOpenChange={setCreditsModalOpen}
+        />
       </DashboardLayout>
     </ProtectedRoute>
   );

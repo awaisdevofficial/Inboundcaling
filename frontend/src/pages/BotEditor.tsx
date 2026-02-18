@@ -22,7 +22,6 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { TranscriptDisplay } from "@/components/transcript/TranscriptDisplay";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { formatDistanceToNow, format } from "date-fns";
@@ -685,8 +684,7 @@ Always check the time FIRST before engaging in any conversation with the caller.
         const result: any = await createBot(payload);
         if (result && (result.id || result.bot_id)) {
           toast.success("Agent created successfully");
-          const newId = result.id || result.bot_id;
-          navigate(`/bots/${newId}`);
+          navigate("/bots");
         }
       } else if (id) {
         await updateBot(id, payload);
@@ -1392,11 +1390,17 @@ Always check the time FIRST before engaging in any conversation with the caller.
                       </div>
 
                       {selectedCall.transcript && (
-                        <TranscriptDisplay
-                          transcript={selectedCall.transcript}
-                          metadata={selectedCall.metadata || selectedCall.webhook_response}
-                          height="h-96"
-                        />
+                        <div>
+                          <Label className="text-muted-foreground flex items-center gap-2">
+                            <FileText className="h-4 w-4" />
+                            Transcript
+                          </Label>
+                          <ScrollArea className="h-48 mt-2 p-3 bg-secondary/30 rounded-lg">
+                            <p className="text-sm whitespace-pre-wrap">
+                              {selectedCall.transcript}
+                            </p>
+                          </ScrollArea>
+                        </div>
                       )}
 
                       {selectedCall.error_message && (

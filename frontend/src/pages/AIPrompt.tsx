@@ -72,6 +72,9 @@ export default function AIPrompt() {
   const [isUploading, setIsUploading] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionResult, setExtractionResult] = useState<{ extractedProfile: Partial<AgentPromptProfile>; missingFields: string[] } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<string>("");
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [autoGenerateAfterExtraction, setAutoGenerateAfterExtraction] = useState(true);
 
   // Prompt generation
   const [generatedPrompt, setGeneratedPrompt] = useState("");
@@ -117,29 +120,82 @@ export default function AIPrompt() {
     }
   }, [profile]);
 
+  // Validate file before upload
+  const validateFile = (file: File): string | null => {
+    const allowedTypes = [
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/msword",
+      "text/plain",
+    ];
+    
+    if (!allowedTypes.includes(file.type)) {
+      return "Invalid file type. Please upload PDF, DOCX, or TXT files only.";
+    }
+    
+    const maxSize = 50 * 1024 * 1024; // 50MB
+    if (file.size > maxSize) {
+      return "File size exceeds 50MB limit. Please upload a smaller file.";
+    }
+    
+    return null;
+  };
+
   // Handle file upload and extraction
   const handleFileUpload = async (file: File) => {
-    if (!user) return;
+    if (!user) {
+      toast({
+        title: "Error",
+        description: "Please log in to upload documents",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Validate file
+    const validationError = validateFile(file);
+    if (validationError) {
+      toast({
+        title: "Invalid File",
+        description: validationError,
+        variant: "destructive",
+      });
+      return;
+    }
 
     setUploadedFile(file);
     setIsUploading(true);
     setIsExtracting(true);
+    setUploadProgress("Extracting text from document...");
 
     try {
       // Step 1: Extract text from document via backend
       const formData = new FormData();
       formData.append("file", file);
 
+      setUploadProgress("Sending document to server...");
       const extractResponse = await fetch(`${BACKEND_URL}/api/extract-document`, {
         method: "POST",
         body: formData,
       });
 
-      if (!extractResponse.ok) {
-        throw new Error("Failed to extract text from document");
+      let extractData;
+      try {
+        extractData = await extractResponse.json();
+      } catch (parseError) {
+        throw new Error("Invalid response from server. Please try again.");
       }
 
-      const { extractedText } = await extractResponse.json();
+      if (!extractResponse.ok || !extractData.success) {
+        throw new Error(extractData.error || "Failed to extract text from document");
+      }
+
+      if (!extractData.extractedText || extractData.extractedText.trim().length === 0) {
+        throw new Error("No text could be extracted from the document. Please ensure the document contains readable text.");
+      }
+
+      const { extractedText } = extractData;
+      setUploadProgress("Uploading document to storage...");
 
       // Step 2: Upload file to Supabase storage
       const uploadResult = await uploadFile(file, "company-documents", "", user.id);
@@ -147,53 +203,132 @@ export default function AIPrompt() {
         throw new Error(uploadResult.error);
       }
 
+      setUploadProgress("Analyzing document content with AI...");
+
       // Step 3: Use Agent A to extract profile
       const extraction = await extractDocumentProfile(extractedText);
       
       setExtractionResult(extraction);
+      setUploadProgress("Filling form with extracted data...");
 
       // Step 4: Auto-fill form with extracted data
-      setFormData(prev => ({
-        ...prev,
+      const updatedFormData = {
+        ...formData,
         ...extraction.extractedProfile,
         // Merge arrays instead of replacing
-        services: [...(prev.services || []), ...(extraction.extractedProfile.services || [])].filter((v, i, a) => a.indexOf(v) === i),
-        faqs: [...(prev.faqs || []), ...(extraction.extractedProfile.faqs || [])].filter((v, i, a) => a.indexOf(v) === i),
-        objections: [...(prev.objections || []), ...(extraction.extractedProfile.objections || [])].filter((v, i, a) => a.indexOf(v) === i),
-        policies: [...(prev.policies || []), ...(extraction.extractedProfile.policies || [])].filter((v, i, a) => a.indexOf(v) === i),
-      }));
+        services: [...(formData.services || []), ...(extraction.extractedProfile.services || [])].filter((v, i, a) => a.indexOf(v) === i),
+        faqs: [...(formData.faqs || []), ...(extraction.extractedProfile.faqs || [])].filter((v, i, a) => a.indexOf(v) === i),
+        objections: [...(formData.objections || []), ...(extraction.extractedProfile.objections || [])].filter((v, i, a) => a.indexOf(v) === i),
+        policies: [...(formData.policies || []), ...(extraction.extractedProfile.policies || [])].filter((v, i, a) => a.indexOf(v) === i),
+      };
+      
+      setFormData(updatedFormData);
 
-      // Step 5: Save document to database (using RPC or direct insert with type assertion)
+      // Step 5: Save document to database
+      setUploadProgress("Saving document record...");
       try {
-        await (supabase as any).from("company_documents").insert({
-          user_id: user.id,
-          file_name: file.name,
-          file_type: file.type,
-          file_url: uploadResult.url,
-          extracted_text: extractedText,
-          extracted_profile: extraction.extractedProfile,
-          missing_fields: extraction.missingFields,
-        });
+        const { error: dbError } = await supabase
+          .from("company_documents")
+          .insert({
+            user_id: user.id,
+            file_name: file.name,
+            file_type: file.type,
+            file_url: uploadResult.url,
+            extracted_text: extractedText,
+            extracted_profile: extraction.extractedProfile,
+            missing_fields: extraction.missingFields,
+          });
+
+        if (dbError) {
+          console.warn("Could not save document to database:", dbError);
+        }
       } catch (dbError) {
-        // Table might not exist yet - that's okay, document was still processed
         console.warn("Could not save document to database:", dbError);
       }
 
+      setUploadProgress("");
+
+      // Show success message
+      const missingCount = extraction.missingFields.length;
       toast({
-        title: "Document Processed",
-        description: `Extracted ${extraction.missingFields.length} missing fields. Please review and fill them.`,
+        title: "Document Processed Successfully",
+        description: missingCount > 0 
+          ? `Extracted information from document. ${missingCount} field(s) still need to be filled manually.`
+          : "All information extracted successfully! You can now generate your prompt.",
+        variant: "default",
       });
+
+      // Step 6: Optionally auto-generate prompt if enough data is available
+      if (autoGenerateAfterExtraction && missingCount === 0) {
+        // Check if we have minimum required fields
+        const hasRequiredFields = 
+          updatedFormData.companyName &&
+          updatedFormData.agentPurpose &&
+          updatedFormData.targetAudience &&
+          updatedFormData.callGoal &&
+          updatedFormData.callType &&
+          (updatedFormData.businessIndustry || updatedFormData.businessDescription) &&
+          updatedFormData.services &&
+          updatedFormData.services.length >= 2;
+
+        if (hasRequiredFields) {
+          setTimeout(() => {
+            toast({
+              title: "Auto-generating Prompt",
+              description: "Generating prompt from extracted data...",
+            });
+            handleGeneratePrompt();
+          }, 1000);
+        }
+      }
     } catch (error: any) {
+      console.error("Document upload error:", error);
       toast({
-        title: "Error",
-        description: error.message || "Failed to process document",
+        title: "Error Processing Document",
+        description: error.message || "Failed to process document. Please try again.",
         variant: "destructive",
       });
       setUploadedFile(null);
+      setExtractionResult(null);
+      setUploadProgress("");
     } finally {
       setIsUploading(false);
       setIsExtracting(false);
     }
+  };
+
+  // Handle drag and drop
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      handleFileUpload(file);
+    }
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleFileUpload(file);
+    }
+    // Reset input so same file can be selected again
+    e.target.value = "";
   };
 
   // Handle prompt generation using Agent B
@@ -234,20 +369,29 @@ export default function AIPrompt() {
       // Use Agent B: Prompt Generator
       const result = await generatePromptFromProfile(formData);
 
-      if (result.status === "needs_clarification") {
+      // Always set the generated prompt when status is "ready"
+      if (result.status === "ready") {
+        setGeneratedPrompt(result.finalPrompt);
+        // Show clarification questions as optional if they exist
+        if (result.clarificationQuestions && result.clarificationQuestions.length > 0) {
+          setClarificationQuestions(result.clarificationQuestions);
+          setNeedsClarification(true); // Show them as optional suggestions
+        } else {
+          setClarificationQuestions([]);
+          setNeedsClarification(false);
+        }
+        toast({
+          title: "Success",
+          description: "Prompt generated successfully",
+        });
+      } else if (result.status === "needs_clarification") {
+        // Legacy support for old behavior
         setNeedsClarification(true);
         setClarificationQuestions(result.clarificationQuestions || []);
         toast({
           title: "Clarification Needed",
           description: "Please answer the clarification questions below",
           variant: "default",
-        });
-      } else {
-        setGeneratedPrompt(result.finalPrompt);
-        setNeedsClarification(false);
-        toast({
-          title: "Success",
-          description: "Prompt generated successfully",
         });
       }
     } catch (error: any) {
@@ -297,19 +441,28 @@ export default function AIPrompt() {
     try {
       const result = await generatePromptFromProfile(updatedFormData);
       
-      if (result.status === "needs_clarification") {
+      // Always set the generated prompt when status is "ready"
+      if (result.status === "ready") {
+        setGeneratedPrompt(result.finalPrompt);
+        // Update clarification questions if any remain
+        if (result.clarificationQuestions && result.clarificationQuestions.length > 0) {
+          setClarificationQuestions(result.clarificationQuestions);
+          setNeedsClarification(true);
+        } else {
+          setClarificationQuestions([]);
+          setNeedsClarification(false);
+        }
+        setClarificationAnswers({});
+        toast({
+          title: "Success",
+          description: "Prompt regenerated successfully",
+        });
+      } else if (result.status === "needs_clarification") {
+        // Legacy support
         setClarificationQuestions(result.clarificationQuestions || []);
         toast({
           title: "More Information Needed",
           description: "Please provide additional details",
-        });
-      } else {
-        setGeneratedPrompt(result.finalPrompt);
-        setNeedsClarification(false);
-        setClarificationAnswers({});
-        toast({
-          title: "Success",
-          description: "Prompt generated successfully",
         });
       }
     } catch (error: any) {
@@ -594,66 +747,127 @@ export default function AIPrompt() {
                 <CardContent className="space-y-6 pt-6">
                   {/* Document Upload Section */}
                   <div className="space-y-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                    <div className="flex items-center gap-2">
-                      <Upload className="h-4 w-4 text-blue-600" />
-                      <Label className="text-base font-semibold">Upload Company Document (Optional)</Label>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Upload className="h-5 w-5 text-blue-600" />
+                        <Label className="text-base font-semibold">Upload Company Document (Optional)</Label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="auto-generate-checkbox"
+                          checked={autoGenerateAfterExtraction}
+                          onChange={(e) => setAutoGenerateAfterExtraction(e.target.checked)}
+                          className="h-4 w-4"
+                        />
+                        <Label htmlFor="auto-generate-checkbox" className="text-xs text-slate-600 cursor-pointer">
+                          Auto-generate prompt after extraction
+                        </Label>
+                      </div>
                     </div>
                     <p className="text-sm text-slate-600">
                       Upload a PDF, DOCX, or TXT file containing your company information. The system will automatically extract and fill the form.
                     </p>
-                    <div className="flex items-center gap-4">
+                    
+                    {/* Drag and Drop Zone */}
+                    <div
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                      className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                        isDragOver
+                          ? "border-blue-500 bg-blue-100"
+                          : isUploading || isExtracting
+                          ? "border-blue-300 bg-blue-50"
+                          : "border-blue-300 bg-white hover:border-blue-400 hover:bg-blue-50/50"
+                      } ${isUploading || isExtracting ? "cursor-wait" : "cursor-pointer"}`}
+                      onClick={() => {
+                        if (!isUploading && !isExtracting) {
+                          document.getElementById("document-upload")?.click();
+                        }
+                      }}
+                    >
                       <input
                         type="file"
                         accept=".pdf,.docx,.doc,.txt"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleFileUpload(file);
-                        }}
+                        onChange={handleFileInputChange}
                         className="hidden"
                         id="document-upload"
                         disabled={isUploading || isExtracting}
                       />
-                      <label htmlFor="document-upload">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={isUploading || isExtracting}
-                          className="cursor-pointer"
-                        >
-                          {isUploading || isExtracting ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      
+                      {isUploading || isExtracting ? (
+                        <div className="space-y-3">
+                          <Loader2 className="h-8 w-8 animate-spin text-blue-600 mx-auto" />
+                          <div className="space-y-1">
+                            <p className="text-sm font-medium text-blue-900">
                               {isExtracting ? "Extracting..." : "Uploading..."}
-                            </>
-                          ) : (
-                            <>
-                              <Upload className="mr-2 h-4 w-4" />
-                              Upload Document
-                            </>
-                          )}
-                        </Button>
-                      </label>
-                      {uploadedFile && (
-                        <div className="flex items-center gap-2 text-sm">
-                          <FileText className="h-4 w-4 text-green-600" />
-                          <span>{uploadedFile.name}</span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setUploadedFile(null)}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
+                            </p>
+                            {uploadProgress && (
+                              <p className="text-xs text-blue-700">{uploadProgress}</p>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <Upload className="h-10 w-10 text-blue-600 mx-auto" />
+                          <div className="space-y-1">
+                            <p className="text-sm font-medium text-slate-900">
+                              Drag and drop your document here
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              or click to browse (PDF, DOCX, TXT - Max 50MB)
+                            </p>
+                          </div>
                         </div>
                       )}
                     </div>
-                    {extractionResult && extractionResult.missingFields.length > 0 && (
-                      <Alert>
-                        <AlertCircle className="h-4 w-4" />
-                        <AlertDescription>
-                          <strong>Missing Fields:</strong> {extractionResult.missingFields.join(", ")}. Please fill these manually.
-                        </AlertDescription>
-                      </Alert>
+
+                    {/* Uploaded File Info */}
+                    {uploadedFile && !isUploading && !isExtracting && (
+                      <div className="flex items-center justify-between gap-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                        <div className="flex items-center gap-2 text-sm">
+                          <CheckCircle2 className="h-5 w-5 text-green-600" />
+                          <div>
+                            <p className="font-medium text-green-900">{uploadedFile.name}</p>
+                            <p className="text-xs text-green-700">
+                              {(uploadedFile.size / 1024 / 1024).toFixed(2)} MB
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setUploadedFile(null);
+                            setExtractionResult(null);
+                          }}
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Extraction Results */}
+                    {extractionResult && (
+                      <div className="space-y-2">
+                        {extractionResult.missingFields.length > 0 ? (
+                          <Alert>
+                            <AlertCircle className="h-4 w-4" />
+                            <AlertDescription>
+                              <strong>Missing Fields:</strong> {extractionResult.missingFields.join(", ")}. Please fill these manually.
+                            </AlertDescription>
+                          </Alert>
+                        ) : (
+                          <Alert className="border-green-200 bg-green-50">
+                            <CheckCircle2 className="h-4 w-4 text-green-600" />
+                            <AlertDescription className="text-green-800">
+                              <strong>Success!</strong> All information extracted successfully. You can now generate your prompt.
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                      </div>
                     )}
                   </div>
 
@@ -852,26 +1066,26 @@ export default function AIPrompt() {
                     )}
                   </Button>
 
-                  {/* Clarification Questions */}
-                  {needsClarification && clarificationQuestions.length > 0 && (
+                  {/* Optional Clarification Questions */}
+                  {clarificationQuestions.length > 0 && (
                     <Alert>
                       <AlertCircle className="h-4 w-4" />
                       <AlertDescription>
                         <div className="space-y-4">
-                          <p className="font-semibold">Please answer these questions to generate the prompt:</p>
+                          <p className="font-semibold">For better results, you can answer these optional questions:</p>
                           {clarificationQuestions.map((question, index) => (
                             <div key={index} className="space-y-2">
                               <Label>{question}</Label>
                               <Textarea
                                 value={clarificationAnswers[question] || ""}
                                 onChange={(e) => setClarificationAnswers(prev => ({ ...prev, [question]: e.target.value }))}
-                                placeholder="Your answer..."
+                                placeholder="Your answer (optional)..."
                                 className="min-h-[60px]"
                               />
                             </div>
                           ))}
-                          <Button onClick={handleAnswerClarification} className="w-full">
-                            Submit Answers & Regenerate
+                          <Button onClick={handleAnswerClarification} className="w-full" variant="outline">
+                            Submit Answers & Regenerate (Optional)
                           </Button>
                         </div>
                       </AlertDescription>
