@@ -305,8 +305,18 @@ export function OnboardingTour() {
     if (hasInitialized.current) return;
     
     if (profile) {
+      // Don't show tour if it's already completed - always check database first
+      if (profile.tour_completed === true) {
+        setIsVisible(false);
+        localStorage.removeItem(TOUR_STORAGE_KEY);
+        localStorage.removeItem(TOUR_ACTIVE_KEY);
+        hasInitialized.current = true;
+        return;
+      }
+      
+      // Only show tour if it's not completed and either explicitly not completed or tour is active in localStorage
       const tourActive = localStorage.getItem(TOUR_ACTIVE_KEY) === "true";
-      if (profile.tour_completed === false || tourActive) {
+      if (profile.tour_completed === false || (tourActive && profile.tour_completed !== true)) {
         setIsVisible(true);
         localStorage.setItem(TOUR_ACTIVE_KEY, "true");
         hasInitialized.current = true;
@@ -484,20 +494,46 @@ export function OnboardingTour() {
 
   const handleComplete = async () => {
     cleanup();
-    await markTourCompleted();
+    const creditsGranted = await markTourCompleted();
     setIsVisible(false);
     localStorage.removeItem(TOUR_STORAGE_KEY);
     localStorage.removeItem(TOUR_ACTIVE_KEY);
-    toast({
-      title: "Tour Completed!",
-      description: "You've received 100 free trial credits! You can restart the tour anytime from Settings.",
-    });
+    
+    if (creditsGranted) {
+      toast({
+        title: "Tour Completed!",
+        description: "You've received 100 free trial credits! The tour is now disabled.",
+      });
+    } else {
+      toast({
+        title: "Tour Completed!",
+        description: "Tour completed successfully. You've already received your free credits previously.",
+      });
+    }
   };
 
-  const markTourCompleted = async () => {
-    if (!profile) return;
+  const markTourCompleted = async (): Promise<boolean> => {
+    if (!profile) return false;
 
     try {
+      // Check if tour credits were already granted by looking for tour completion reward in credit logs
+      const { data: creditLogs, error: checkError } = await supabase
+        .from("credit_usage_logs")
+        .select("id, cost_breakdown")
+        .eq("user_id", profile.user_id)
+        .eq("usage_type", "other");
+
+      if (checkError) {
+        console.error("Error checking for existing tour credits:", checkError);
+      }
+
+      // Check if any log contains tour completion reward
+      const creditsAlreadyGranted = creditLogs?.some((log) => {
+        const breakdown = log.cost_breakdown as any;
+        return breakdown?.description === "Free trial credits - Tour completion reward" ||
+               (breakdown?.purchase?.description === "Free trial credits - Tour completion reward");
+      }) || false;
+
       // Mark tour as completed
       const { error: updateError } = await supabase
         .from("profiles")
@@ -506,25 +542,32 @@ export function OnboardingTour() {
 
       if (updateError) throw updateError;
 
-      // Deposit 100 free trial credits when tour is completed
-      try {
-        await addCredits(
-          profile.user_id,
-          100,
-          "Free trial credits - Tour completion reward",
-          `tour_completion_${profile.user_id}_${Date.now()}`
-        );
-      } catch (creditError) {
-        console.error("Error adding credits after tour completion:", creditError);
-        // Don't fail the tour completion if credit addition fails
-        toast({
-          title: "Tour Completed",
-          description: "Tour marked as complete, but there was an issue adding credits. Please contact support.",
-          variant: "destructive",
-        });
+      // Only deposit credits if they haven't been granted before
+      if (!creditsAlreadyGranted) {
+        try {
+          await addCredits(
+            profile.user_id,
+            100,
+            "Free trial credits - Tour completion reward",
+            `tour_completion_${profile.user_id}_${Date.now()}`
+          );
+          await refetch();
+          return true; // Credits were granted
+        } catch (creditError) {
+          console.error("Error adding credits after tour completion:", creditError);
+          // Don't fail the tour completion if credit addition fails
+          toast({
+            title: "Tour Completed",
+            description: "Tour marked as complete, but there was an issue adding credits. Please contact support.",
+            variant: "destructive",
+          });
+          await refetch();
+          return false;
+        }
       }
 
       await refetch();
+      return false; // Credits were already granted
     } catch (error) {
       console.error("Error marking tour as completed:", error);
       toast({
@@ -532,6 +575,7 @@ export function OnboardingTour() {
         description: "Failed to complete tour. Please try again.",
         variant: "destructive",
       });
+      return false;
     }
   };
 

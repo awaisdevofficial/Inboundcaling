@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Phone, Loader2, Plus, X, Upload, CheckCircle2, Trash2, Clock, Maximize2, Minimize2, Play, Link2, Unlink, User, Bot } from "lucide-react";
+import { Phone, Loader2, Plus, X, Upload, CheckCircle2, Trash2, Clock, Maximize2, Minimize2, Play, User } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,16 +7,13 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
-import { useBots } from "@/hooks/useBots";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { callWebhook } from "@/lib/webhook";
-import { Bot as BotType } from "@/types/database";
 import { Profile } from "@/types/database";
 
 interface ImportedNumber {
@@ -27,11 +24,6 @@ interface ImportedNumber {
   status?: string;
   importStatus?: "pending" | "importing" | "success" | "failed";
   importError?: string;
-  linked_agent?: {
-    id: string;
-    name: string;
-    user_id: string;
-  } | null;
   owner?: {
     user_id: string;
     email: string | null;
@@ -42,7 +34,6 @@ interface ImportedNumber {
 export default function PhoneNumbers() {
   const { user } = useAuth();
   const { profile } = useProfile();
-  const { bots, refetch: refetchBots } = useBots();
   const [phoneNumber, setPhoneNumber] = useState("");
   const [terminationUri, setTerminationUri] = useState("");
   const [numberName, setNumberName] = useState("");
@@ -50,7 +41,6 @@ export default function PhoneNumbers() {
   const [isImporting, setIsImporting] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isVideoExpanded, setIsVideoExpanded] = useState(false);
-  const [linkingNumberId, setLinkingNumberId] = useState<string | null>(null);
   const [userProfiles, setUserProfiles] = useState<Record<string, Profile>>({});
 
   // Helper function to normalize phone number to E.164 format
@@ -106,24 +96,7 @@ export default function PhoneNumbers() {
 
       setUserProfiles(profilesMap);
 
-      const { data: botsData } = await supabase
-        .from("bots")
-        .select("id, name, agent_number, user_id")
-        .eq("user_id", user.id);
-
-      const phoneToBotMap: Record<string, { id: string; name: string; user_id: string }> = {};
-      (botsData || []).forEach((bot: any) => {
-        if (bot.agent_number) {
-          phoneToBotMap[bot.agent_number] = {
-            id: bot.id,
-            name: bot.name,
-            user_id: bot.user_id,
-          };
-        }
-      });
-
       const mappedNumbers = (phoneNumbersData || []).map((item: any) => {
-        const linkedAgent = phoneToBotMap[item.phone_number] || null;
         const owner = profilesMap[item.user_id] ? {
           user_id: item.user_id,
           email: profilesMap[item.user_id].email,
@@ -137,7 +110,6 @@ export default function PhoneNumbers() {
           name: item.name || "",
           status: item.status,
           importStatus: "success" as const,
-          linked_agent: linkedAgent,
           owner: owner,
         };
       });
@@ -210,96 +182,29 @@ export default function PhoneNumbers() {
       };
       if (user) {
         try {
-          // Check if the phone number already exists for this user (check all formats)
-          // Fetch all phone numbers for this user and compare normalized versions
-          const { data: allNumbers, error: fetchError } = await supabase
-            .from("imported_phone_numbers" as any)
-            .select("id, phone_number")
-            .eq("user_id", user.id);
-
-          if (fetchError && fetchError.code !== "PGRST116") {
-            throw new Error(`Database error: ${fetchError.message}`);
-          }
-
-          // Check if normalized version already exists
-          const existingData = (allNumbers || []).find((item: any) => 
-            normalizePhoneNumber(item.phone_number) === normalizedPhoneNumber
-          );
-
-          let importedNumberId: string;
-
-          if (existingData && (existingData as any).id) {
-            // Update existing record
-            const existingId = (existingData as any).id;
-            const updateData: any = {
-              termination_uri: number.termination_uri,
-              status: "active" as const,
-              imported_at: new Date().toISOString(),
-            };
-
-            const { data: updatedData, error: updateError } = await supabase
-              .from("imported_phone_numbers" as any)
-              .update(updateData)
-              .eq("id", existingId)
-              .select()
-              .single();
-
-            if (updateError) {
-              throw new Error(`Database error: ${updateError.message}`);
-            }
-
-            importedNumberId = existingId;
-          } else {
-            // Insert new record
-            const insertData: any = {
-              user_id: user.id,
+          // ONLY send to webhook - do NOT create in database directly
+          // The webhook will handle creating the phone number in the database
+          await callWebhook(
+            {
+              action: "import_phone_number",
               phone_number: number.phone_number,
               termination_uri: number.termination_uri,
-              status: "active" as const,
-              imported_at: new Date().toISOString(),
-            };
-
-            const { data: insertedData, error: insertError } = await supabase
-              .from("imported_phone_numbers" as any)
-              .insert(insertData)
-              .select()
-              .single();
-
-            if (insertError) {
-              throw new Error(`Database error: ${insertError.message}`);
-            }
-
-            importedNumberId = (insertedData as any)?.id || number.phone_number;
-          }
-          
-          // Send phone number import data to webhook
-          try {
-            await callWebhook(
-              {
-                action: "import_phone_number",
-                phone_number: number.phone_number,
-                termination_uri: number.termination_uri,
-                name: number.name || number.phone_number,
-                status: "active",
-                imported_number_id: importedNumberId,
-                user: {
-                  id: user.id,
-                  email: user.email,
-                  full_name: profile?.full_name || null,
-                  company_name: profile?.company_name || null,
-                },
-                timestamp: new Date().toISOString(),
+              name: number.name || number.phone_number,
+              status: "active",
+              user: {
+                id: user.id,
+                email: user.email,
+                full_name: profile?.full_name || null,
+                company_name: profile?.company_name || null,
               },
-              {
-                url: "https://auto.nsolbpo.com/webhook/import",
-              }
-            );
-          } catch (webhookError: any) {
-            // Log webhook error but don't fail the import
-            // The phone number is still successfully saved to database
-          }
+              timestamp: new Date().toISOString(),
+            },
+            {
+              url: "https://auto.nsolbpo.com/webhook/import",
+            }
+          );
           
-          // Refresh the numbers list to get updated agent/user info
+          // Refresh the numbers list to get the data that the webhook created
           await refreshPhoneNumbers();
 
           toast({
@@ -307,8 +212,8 @@ export default function PhoneNumbers() {
             description: `Successfully imported ${number.phone_number} and sent to webhook.`,
             className: "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800",
           });
-        } catch (dbError: any) {
-          const errorMessage = dbError instanceof Error ? dbError.message : "Unknown error occurred";
+        } catch (webhookError: any) {
+          const errorMessage = webhookError instanceof Error ? webhookError.message : "Unknown error occurred";
           const failedNumber: ImportedNumber = {
             ...number,
             importStatus: "failed",
@@ -549,107 +454,6 @@ export default function PhoneNumbers() {
     }
   };
 
-  const handleLinkAgent = async (phoneNumberId: string, phoneNumber: string, botId: string) => {
-    if (!user || !phoneNumberId || !botId) return;
-
-    setLinkingNumberId(phoneNumberId);
-
-    try {
-      // Check if this phone number is already linked to another agent
-      const { data: existingBots, error: checkError } = await supabase
-        .from("bots")
-        .select("id, name, agent_number")
-        .eq("agent_number", phoneNumber)
-        .neq("id", botId);
-
-      if (checkError) throw checkError;
-
-      if (existingBots && existingBots.length > 0) {
-        toast({
-          title: "Error",
-          description: "This phone number is already linked to another agent. Please unlink it first.",
-          variant: "destructive",
-        });
-        setLinkingNumberId(null);
-        return;
-      }
-
-      // Check if the selected bot already has a different phone number
-      const { data: selectedBot, error: botError } = await supabase
-        .from("bots")
-        .select("id, agent_number")
-        .eq("id", botId)
-        .single();
-
-      if (botError) throw botError;
-
-      if (selectedBot.agent_number && selectedBot.agent_number !== phoneNumber) {
-        toast({
-          title: "Error",
-          description: "This agent is already linked to a different phone number. Please unlink it first.",
-          variant: "destructive",
-        });
-        setLinkingNumberId(null);
-        return;
-      }
-
-      // Link the phone number to the agent
-      const { error: updateError } = await supabase
-        .from("bots")
-        .update({ agent_number: phoneNumber })
-        .eq("id", botId)
-        .eq("user_id", user.id);
-
-      if (updateError) throw updateError;
-
-      // Refresh bots and phone numbers
-      await refetchBots();
-      await refreshPhoneNumbers();
-
-      toast({
-        title: "Success",
-        description: "Phone number linked to agent successfully",
-      });
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error?.message || "Failed to link phone number to agent",
-        variant: "destructive",
-      });
-    } finally {
-      setLinkingNumberId(null);
-    }
-  };
-
-  const handleUnlinkAgent = async (phoneNumberId: string, botId: string) => {
-    if (!user || !phoneNumberId || !botId) return;
-
-    try {
-      // Unlink the phone number from the agent
-      const { error: updateError } = await supabase
-        .from("bots")
-        .update({ agent_number: null })
-        .eq("id", botId)
-        .eq("user_id", user.id);
-
-      if (updateError) throw updateError;
-
-      // Refresh bots and phone numbers
-      await refetchBots();
-      await refreshPhoneNumbers();
-
-      toast({
-        title: "Success",
-        description: "Phone number unlinked from agent successfully",
-      });
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error?.message || "Failed to unlink phone number from agent",
-        variant: "destructive",
-      });
-    }
-  };
 
   return (
     <ProtectedRoute>
@@ -920,22 +724,6 @@ export default function PhoneNumbers() {
                                     </div>
                                   )}
 
-                                  {/* Linked Agent Information */}
-                                  {number.linked_agent ? (
-                                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-200">
-                                      <Bot className="h-3 w-3 text-blue-500" />
-                                      <span className="text-xs text-blue-600 font-medium">
-                                        Linked to: {number.linked_agent.name}
-                                      </span>
-                                    </div>
-                                  ) : (
-                                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-200">
-                                      <span className="text-xs text-slate-500 italic">
-                                        Not linked to any agent
-                                      </span>
-                                    </div>
-                                  )}
-
                                   {isFailed && number.importError && (
                                     <div className="text-xs text-red-600 dark:text-red-400">
                                       Error: {number.importError}
@@ -945,49 +733,6 @@ export default function PhoneNumbers() {
                                 <div className="flex flex-col gap-2">
                                   {isSuccess && number.id && (
                                     <>
-                                      {/* Link/Unlink Agent */}
-                                      {number.linked_agent ? (
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => handleUnlinkAgent(number.id!, number.linked_agent!.id)}
-                                          disabled={linkingNumberId === number.id}
-                                          className="text-orange-600 hover:text-orange-700 border-orange-200 hover:border-orange-300"
-                                        >
-                                          {linkingNumberId === number.id ? (
-                                            <Loader2 className="h-3 w-3 animate-spin" />
-                                          ) : (
-                                            <>
-                                              <Unlink className="h-3 w-3 mr-1" />
-                                              Unlink
-                                            </>
-                                          )}
-                                        </Button>
-                                      ) : (
-                                        <Select
-                                          onValueChange={(botId) => handleLinkAgent(number.id!, number.phone_number, botId)}
-                                          disabled={linkingNumberId === number.id || bots.length === 0}
-                                        >
-                                          <SelectTrigger className="h-8 text-xs">
-                                            <SelectValue placeholder="Link Agent" />
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            {bots
-                                              .filter(bot => !bot.agent_number || bot.agent_number === number.phone_number)
-                                              .map((bot) => (
-                                                <SelectItem key={bot.id} value={bot.id}>
-                                                  {bot.name}
-                                                </SelectItem>
-                                              ))}
-                                            {bots.filter(bot => !bot.agent_number || bot.agent_number === number.phone_number).length === 0 && (
-                                              <SelectItem value="no-agents" disabled>
-                                                No available agents
-                                              </SelectItem>
-                                            )}
-                                          </SelectContent>
-                                        </Select>
-                                      )}
-                                      
                                       {/* Delete Button */}
                                       <Button
                                         variant="ghost"

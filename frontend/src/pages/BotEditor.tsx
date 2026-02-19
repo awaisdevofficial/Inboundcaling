@@ -138,12 +138,11 @@ export default function BotEditor() {
 
       setLoadingImportedNumbers(true);
       try {
-        // Fetch phone numbers
+        // Fetch phone numbers - don't filter by status, get all numbers
         const { data: phoneNumbersData, error: phoneError } = await supabase
           .from("imported_phone_numbers")
-          .select("id, phone_number")
+          .select("id, phone_number, status")
           .eq("user_id", user.id)
-          .eq("status", "active")
           .order("created_at", { ascending: false });
 
         if (phoneError) throw phoneError;
@@ -614,11 +613,6 @@ Always check the time FIRST before engaging in any conversation with the caller.
       return;
     }
     
-    if (!formData.transfer_call_to?.trim()) {
-      toast.error("Transfer call number is required");
-      return;
-    }
-    
     if (!formData.voice_id) {
       toast.error("Voice selection is required");
       return;
@@ -683,14 +677,8 @@ Always check the time FIRST before engaging in any conversation with the caller.
       if (isCreateMode) {
         const result: any = await createBot(payload);
         if (result && (result.id || result.bot_id)) {
-          // Navigate to the newly created bot's editor page
-          const botId = result.database_bot_id || result.id || result.bot_id;
-          if (botId) {
-            navigate(`/bots/${botId}`);
-          } else {
-            // Fallback to bots list if ID not available
-            navigate("/bots");
-          }
+          // Navigate to the bots list page after successful creation
+          navigate("/bots");
         }
       } else if (id) {
         await updateBot(id, payload);
@@ -752,7 +740,6 @@ Always check the time FIRST before engaging in any conversation with the caller.
               disabled={
                 saving ||
                 !formData.name.trim() ||
-                !formData.transfer_call_to?.trim() ||
                 !formData.voice_id ||
                 !formData.begin_message?.trim() ||
                 !formData.general_prompt?.trim() ||
@@ -848,23 +835,81 @@ Always check the time FIRST before engaging in any conversation with the caller.
                                   <SelectValue placeholder="Select incoming number" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  {phoneNumbersWithAgents.map((phoneData) => (
-                                    <SelectItem key={phoneData.phone_number} value={phoneData.phone_number}>
-                                      <div className="flex items-center justify-between w-full">
-                                        <span className="font-medium">{phoneData.phone_number}</span>
-                                        {phoneData.linked_agent && (
-                                          <Badge variant="secondary" className="ml-2 text-xs">
-                                            {phoneData.linked_agent.name}
-                                          </Badge>
-                                        )}
-                                      </div>
-                                    </SelectItem>
-                                  ))}
-                                  {phoneNumbersWithAgents.length === 0 && !loadingImportedNumbers && (
-                                    <div className="px-2 py-4 text-sm text-muted-foreground text-center">No numbers available</div>
+                                  {loadingImportedNumbers ? (
+                                    <div className="px-2 py-4 text-sm text-muted-foreground text-center flex items-center justify-center gap-2">
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                      Loading phone numbers...
+                                    </div>
+                                  ) : phoneNumbersWithAgents.length > 0 ? (
+                                    phoneNumbersWithAgents.map((phoneData) => {
+                                      const isLinked = phoneData.linked_agent !== null;
+                                      const isLinkedToCurrentBot = !isCreateMode && bot && phoneData.linked_agent?.id === bot.id;
+                                      const isLinkedToOtherBot = isLinked && !isLinkedToCurrentBot;
+                                      
+                                      return (
+                                        <SelectItem 
+                                          key={phoneData.phone_number} 
+                                          value={phoneData.phone_number}
+                                          disabled={isCreateMode && isLinkedToOtherBot}
+                                          className={isLinkedToOtherBot && isCreateMode ? "opacity-50 cursor-not-allowed" : ""}
+                                        >
+                                          <div className="flex items-center justify-between w-full gap-2">
+                                            <span className="font-medium">{phoneData.phone_number}</span>
+                                            {isLinkedToCurrentBot ? (
+                                              <Badge variant="default" className="ml-2 text-xs bg-blue-600">
+                                                <CheckCircle className="h-3 w-3 mr-1" />
+                                                Current Agent
+                                              </Badge>
+                                            ) : isLinkedToOtherBot ? (
+                                              <Badge variant="secondary" className="ml-2 text-xs bg-orange-100 text-orange-700 border-orange-300">
+                                                <AlertCircle className="h-3 w-3 mr-1" />
+                                                Linked to: {phoneData.linked_agent?.name}
+                                              </Badge>
+                                            ) : (
+                                              <Badge variant="outline" className="ml-2 text-xs bg-green-50 text-green-700 border-green-300">
+                                                <CheckCircle className="h-3 w-3 mr-1" />
+                                                Available
+                                              </Badge>
+                                            )}
+                                          </div>
+                                        </SelectItem>
+                                      );
+                                    })
+                                  ) : (
+                                    <div className="px-2 py-4 text-sm text-muted-foreground text-center">
+                                      No numbers available. Import a phone number first.
+                                    </div>
                                   )}
                                 </SelectContent>
                               </Select>
+                              {formData.incoming_number && (
+                                <div className="mt-1">
+                                  {(() => {
+                                    const selectedPhone = phoneNumbersWithAgents.find(p => p.phone_number === formData.incoming_number);
+                                    if (!selectedPhone) return null;
+                                    
+                                    if (selectedPhone.linked_agent) {
+                                      const isCurrentBot = !isCreateMode && bot && selectedPhone.linked_agent.id === bot.id;
+                                      return (
+                                        <p className={`text-xs ${isCurrentBot ? 'text-blue-600' : 'text-orange-600'} flex items-center gap-1`}>
+                                          <AlertCircle className="h-3 w-3" />
+                                          {isCurrentBot 
+                                            ? `This number is already linked to this agent (${selectedPhone.linked_agent.name})`
+                                            : `This number is already linked to agent: ${selectedPhone.linked_agent.name}`
+                                          }
+                                        </p>
+                                      );
+                                    } else {
+                                      return (
+                                        <p className="text-xs text-green-600 flex items-center gap-1">
+                                          <CheckCircle className="h-3 w-3" />
+                                          This number is available and not linked to any agent
+                                        </p>
+                                      );
+                                    }
+                                  })()}
+                                </div>
+                              )}
                               
                               {/* Phone Numbers List with Link/Unlink */}
                               {phoneNumbersWithAgents.length > 0 && (
@@ -949,7 +994,7 @@ Always check the time FIRST before engaging in any conversation with the caller.
                             <div className="grid gap-2">
                               <Label htmlFor="transfer_call_to" className="flex items-center gap-2">
                                 <Phone className="h-4 w-4 text-primary" />
-                                Transfer Call To <span className="text-destructive">*</span>
+                                Transfer Call To
                               </Label>
                               <Input 
                                 id="transfer_call_to"
@@ -957,7 +1002,7 @@ Always check the time FIRST before engaging in any conversation with the caller.
                                 onChange={(e) => setFormData({...formData, transfer_call_to: e.target.value})}
                                 placeholder="e.g. +1234567890"
                               />
-                              <p className="text-xs text-muted-foreground">Phone number to transfer inbound calls to (required)</p>
+                              <p className="text-xs text-muted-foreground">Phone number to transfer inbound calls to (optional)</p>
                             </div>
 
                             {/* Knowledge Base */}

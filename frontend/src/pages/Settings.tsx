@@ -2072,6 +2072,13 @@ export default function Settings() {
                         <li>Viewing call history and statistics</li>
                         <li>Managing credits and billing</li>
                       </ul>
+                      {profile?.tour_completed === true && (
+                        <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-md">
+                          <p className="text-xs text-amber-800">
+                            <strong>Note:</strong> You've already completed the tour and received your free credits. Restarting the tour will not grant credits again.
+                          </p>
+                        </div>
+                      )}
                     </div>
                     <div className="pt-4 border-t border-slate-100">
                       <Button
@@ -2094,7 +2101,7 @@ export default function Settings() {
                             
                             toast({
                               title: "Tour Restarted",
-                              description: "The onboarding tour will start when you navigate to the dashboard.",
+                              description: "The onboarding tour will start when you navigate to the dashboard. Note: You won't receive credits again if you've already completed the tour.",
                             });
                             
                             // Navigate to dashboard to start the tour
